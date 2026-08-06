@@ -20,5 +20,25 @@ CubCave.config = {
   googleClientId: '1009364728296-1at2tingike66r7bvqqok6qul5tiv685.apps.googleusercontent.com',
 
   // Name of the JSON file inside the app's private Drive folder.
-  driveFileName: 'cubcave-data.json'
+  driveFileName: 'cubcave-data.json',
+
+  /* Firebase Cloud Messaging (Phase 4) — fill in from the Firebase console.
+   *
+   * These are all public identifiers, not secrets. A Firebase "apiKey" is a
+   * project identifier used to route requests; it grants nothing on its own.
+   * The VAPID key below is the PUBLIC half of the web-push key pair — the
+   * private half stays in the Firebase console and is never shipped here. */
+  firebase: {
+    apiKey: 'AIzaSyAQr66KatmAi2hwbjKI7NAwtEHdRf-r9h8',
+    authDomain: 'cubcave.firebaseapp.com',
+    projectId: 'cubcave',
+    messagingSenderId: '1009364728296',
+    appId: '1:1009364728296:web:299e1a6785159a97578c5d'
+  },
+
+  // Firebase console → Project settings → Cloud Messaging → Web Push certificates
+  vapidKey: 'BB1zgwDKyVSbHp14byoeaJQZfp-yotS6aQbnPn8Am-OCquzmbtT9g9OWAOBgKqnOMuMDI5IidAa9Hcxn3SBa7PM',
+
+  // Firebase JS SDK version pulled from the CDN when notifications are enabled.
+  firebaseSdkVersion: '10.12.2'
 };

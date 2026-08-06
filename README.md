@@ -16,6 +16,7 @@ js/config.js        YOUR OAuth Client ID goes here
 js/store.js         data model + local mirror
 js/drive.js         Google auth + Drive appDataFolder access
 js/sync.js          reconciles the local mirror with Drive
+js/push.js          notification permission + FCM token (lazy-loads the SDK)
 js/app.js           rendering and input handling
 icons/              generated PNGs — do not edit by hand
 tools/make-icons.js regenerates icons/ (node tools/make-icons.js)
@@ -74,6 +75,51 @@ on first sign-in. That is expected. Click **Advanced → Go to CubCave
 (unsafe)** — "unsafe" here only means Google hasn't reviewed it, and the app is
 yours.
 
+## Notifications
+
+The **Upcoming** tab carries a card that turns on release-day alerts. It asks
+for permission only when you tap **Enable** — never on load, because a browser
+that auto-blocks an unprompted request records a *denial*, and a denied site
+cannot ask again from code.
+
+Once on, the FCM token is written into the Drive JSON as
+`pushSubscription.fcmToken`. Phase 5's scheduled job reads it from there.
+
+A **Test** button appears once enabled. It fires a notification straight from
+the service worker with no server involved — useful for proving permission, the
+worker, and the display path all work before the scheduled job exists.
+
+**iOS:** web push works on iOS 16.4+ **only for apps added to the Home
+Screen**. In a normal Safari tab the app detects this and says so instead of
+offering a button that cannot work.
+
+**Known limitation:** the schema stores a single token, so notifications go to
+the most recently enabled device. Enabling on a phone after a laptop means the
+laptop stops receiving them. Storing a list of tokens instead would be a small
+change — say the word if you want it.
+
+## Firebase setup (one time)
+
+1. **Create the Firebase project** — [console.firebase.google.com](https://console.firebase.google.com/)
+   → **Add project**. When it asks for a name, pick the **existing `CubCave`
+   Google Cloud project** from the dropdown rather than making a new one. That
+   keeps auth, messaging, and Phase 5's function in one place.
+2. **Skip Google Analytics** when offered — not needed, and it adds setup.
+3. **Register a web app** — Project Overview → the **`</>`** (Web) icon.
+   Nickname it `Cub Cave Web`. **Do not** tick "Also set up Firebase Hosting" —
+   the app is hosted on GitHub Pages.
+4. **Copy the config** shown as `firebaseConfig` into the `firebase` block in
+   `js/config.js`: `apiKey`, `authDomain`, `projectId`, `messagingSenderId`,
+   `appId`. (Ignore `storageBucket` and `measurementId`.)
+5. **Generate the VAPID key** — Project settings (gear) → **Cloud Messaging**
+   tab → **Web Push certificates** → **Generate key pair**. Copy the key string
+   into `vapidKey` in `js/config.js`.
+6. Commit and push.
+
+This is all on the free **Spark** plan: Cloud Messaging is free with no usage
+cap and **no payment method required**. (Phase 5's Cloud Function is the part
+that needs billing enabled — see the note there.)
+
 ## Security notes
 
 - **Scope is `drive.appdata` only.** The app can reach its own hidden folder
@@ -108,7 +154,7 @@ Then open http://localhost:5173.
 1. ✅ Scaffolding — PWA shell, manifest, service worker, GitHub Pages
 2. ✅ Core UI, local state
 3. ✅ Google Drive storage (`drive.appdata`)
-4. ⬜ Push notifications (FCM, client side)
+4. ✅ Push notifications (FCM, client side)
 5. ⬜ Daily release check (Cloud Function + Cloud Scheduler)
 6. ⬜ Recommendations (Gemini, one-shot, via Cloud Function)
 7. ⬜ Polish, docs, end-to-end test

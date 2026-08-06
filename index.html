@@ -67,6 +67,18 @@
   </section>
 
   <section class="panel" id="panel-upcoming" role="tabpanel" aria-labelledby="tab-upcoming" hidden>
+
+    <div class="push-card" id="push-card" hidden>
+      <div class="push-card__body">
+        <div class="push-card__title" id="push-title">Release-day notifications</div>
+        <div class="push-card__text" id="push-text"></div>
+      </div>
+      <div class="push-card__actions">
+        <button class="btn" type="button" id="push-btn" hidden></button>
+        <button class="btn" type="button" id="push-test-btn" hidden>Test</button>
+      </div>
+    </div>
+
     <ul class="entry-list" data-list="upcoming"></ul>
     <p class="empty" data-empty="upcoming">
       Nothing on the calendar. Add issues with a release date and you'll get a notification the day they drop.
@@ -152,6 +164,7 @@
 <script src="./js/store.js"></script>
 <script src="./js/drive.js"></script>
 <script src="./js/sync.js"></script>
+<script src="./js/push.js"></script>
 <script src="./js/app.js"></script>
 </body>
 </html>

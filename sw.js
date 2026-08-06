@@ -8,7 +8,7 @@
 
 'use strict';
 
-var CACHE_VERSION = 'cubcave-shell-v6';
+var CACHE_VERSION = 'cubcave-shell-v8';
 
 var SHELL_FILES = [
   './',
@@ -18,6 +18,7 @@ var SHELL_FILES = [
   './js/store.js',
   './js/drive.js',
   './js/sync.js',
+  './js/push.js',
   './js/app.js',
   './manifest.json',
   './icons/icon-192.png',
@@ -54,6 +55,58 @@ self.addEventListener('activate', function (event) {
         }));
       })
       .then(function () { return self.clients.claim(); })
+  );
+});
+
+/* ---------- push notifications (Phase 4) ---------- */
+
+/* Push payloads are handled here rather than via the Firebase SW SDK. One
+ * worker, one handler, and no risk of both the SDK and this file showing the
+ * same alert twice. Phase 5 sends data-only messages, but the parsing below
+ * accepts a `notification` payload too, so a message sent either way works. */
+
+self.addEventListener('push', function (event) {
+  var payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (err) {
+    // Not JSON — fall back to the raw text as the body.
+    payload = { notification: { body: event.data ? event.data.text() : '' } };
+  }
+
+  var n = payload.notification || {};
+  var d = payload.data || {};
+
+  var title = n.title || d.title || 'The Cub Cave';
+  var body = n.body || d.body || 'A comic on your list is out today.';
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: body,
+      icon: './icons/icon-192.png',
+      badge: './icons/icon-192.png',
+      // A shared tag means a second alert replaces the first rather than
+      // stacking up if the job somehow runs twice.
+      tag: d.tag || 'cubcave-release',
+      renotify: true,
+      data: { url: d.url || './' }
+    })
+  );
+});
+
+self.addEventListener('notificationclick', function (event) {
+  event.notification.close();
+  var target = (event.notification.data && event.notification.data.url) || './';
+
+  // Focus the app if it's already open; only open a new window otherwise.
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(function (windows) {
+        for (var i = 0; i < windows.length; i++) {
+          if ('focus' in windows[i]) return windows[i].focus();
+        }
+        if (self.clients.openWindow) return self.clients.openWindow(target);
+      })
   );
 });
 

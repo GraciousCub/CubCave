@@ -239,6 +239,59 @@ body {
 /* Push Edit to the far end so the destructive-ish actions aren't adjacent. */
 .entry__actions .entry__btn:last-child { margin-left: auto; }
 
+/* ---------- notification card ---------- */
+
+.push-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.push-card[hidden] { display: none; }
+
+.push-card__body { flex: 1; min-width: 0; }
+
+.push-card__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.push-card__text {
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.push-card__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.push-card__actions .btn {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+/* On: quieter, since there's nothing left to do. */
+.push-card[data-state="enabled"] {
+  border-color: rgba(87, 199, 138, 0.3);
+}
+
+.push-card[data-state="enabled"] .push-card__title { color: var(--green); }
+
+/* Blocked: worth noticing, since it needs action outside the app. */
+.push-card[data-state="denied"] {
+  border-color: rgba(224, 82, 99, 0.35);
+  background: rgba(224, 82, 99, 0.08);
+}
+
 /* ---------- release-date badges ---------- */
 
 .badge {

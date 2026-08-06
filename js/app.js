@@ -387,6 +387,99 @@ tabs.forEach(function (tab) {
   tab.addEventListener('click', function () { selectTab(tab.dataset.tab); });
 });
 
+/* ---------- notifications ---------- */
+
+var pushCard = document.getElementById('push-card');
+var pushTitle = document.getElementById('push-title');
+var pushText = document.getElementById('push-text');
+var pushBtn = document.getElementById('push-btn');
+var pushTestBtn = document.getElementById('push-test-btn');
+
+// Each state says plainly what's true and what to do about it. "Denied" in
+// particular has to explain itself, because the page can never re-prompt —
+// only the browser's own settings can undo it.
+var PUSH_COPY = {
+  'ios-needs-install': {
+    text: 'On iPhone and iPad, notifications only work once the app is added ' +
+          'to the Home Screen. Tap Share, then "Add to Home Screen", and open ' +
+          'it from there.',
+    button: null
+  },
+  unsupported: {
+    text: 'This browser can\'t do web notifications. The list above still ' +
+          'shows what\'s out.',
+    button: null
+  },
+  unconfigured: {
+    text: 'Not set up yet — Firebase details are still missing from ' +
+          'js/config.js.',
+    button: null
+  },
+  available: {
+    text: 'Get a notification on the day an issue on this list comes out.',
+    button: 'Enable'
+  },
+  denied: {
+    text: 'Notifications are blocked for this site. The app can\'t ask again — ' +
+          're-allow them in your browser\'s site settings, then reload.',
+    button: null
+  },
+  enabled: {
+    text: 'On for this device. You\'ll get an alert on release day.',
+    button: null
+  }
+};
+
+function renderPushCard() {
+  var state = CubCave.push.state();
+  var copy = PUSH_COPY[state] || PUSH_COPY.unsupported;
+
+  pushCard.hidden = false;
+  pushCard.dataset.state = state;
+  pushTitle.textContent = state === 'enabled'
+    ? 'Release-day notifications are on'
+    : 'Release-day notifications';
+  pushText.textContent = copy.text;
+
+  pushBtn.hidden = !copy.button;
+  if (copy.button) pushBtn.textContent = copy.button;
+
+  // A local test proves permission, the service worker and the display path
+  // all work — without waiting for the scheduled job to exist.
+  pushTestBtn.hidden = state !== 'enabled';
+}
+
+pushBtn.addEventListener('click', function () {
+  pushBtn.disabled = true;
+  pushText.textContent = 'Waiting for your permission…';
+
+  CubCave.push.enable().then(function () {
+    toast('Notifications enabled.');
+    renderPushCard();
+  }).catch(function (err) {
+    var reason = err && err.message;
+    if (reason === 'dismissed') toast('Permission dismissed — tap Enable to try again.');
+    else if (reason === 'denied') toast('Notifications blocked in browser settings.');
+    else if (reason === 'no-token') toast('Google didn\'t return a token. Try again.');
+    else toast('Could not enable notifications: ' + reason);
+    renderPushCard();
+  }).then(function () {
+    pushBtn.disabled = false;
+  });
+});
+
+pushTestBtn.addEventListener('click', function () {
+  CubCave.push.sendTestNotification()
+    .then(function () { toast('Test notification sent.'); })
+    .catch(function (err) { toast('Test failed: ' + (err && err.message)); });
+});
+
+CubCave.push.onChange(renderPushCard);
+
+// Also re-render when the data changes — a document pulled from Drive can
+// bring a stored token with it, which changes what this card should say.
+store.subscribe(renderPushCard);
+
 /* ---------- sync status ---------- */
 
 var statusBar = document.querySelector('.status-bar');
@@ -488,6 +581,9 @@ function toast(message) {
   toastTimer = setTimeout(function () { toastEl.hidden = true; }, 2600);
 }
 
+// push.js shows a toast for messages that arrive while the app is open.
+CubCave.showToast = toast;
+
 /* ---------- boot ---------- */
 
 store.subscribe(render);
@@ -504,6 +600,13 @@ try {
 if (savedTab && document.getElementById('panel-' + savedTab)) selectTab(savedTab);
 
 render();
+
+renderPushCard();
+
+// If notifications are already on, quietly re-check the FCM token — they
+// rotate, and a stale one means alerts stop arriving with no visible symptom.
+// Deferred so it never competes with first paint.
+setTimeout(function () { CubCave.push.refreshIfEnabled(); }, 1500);
 
 CubCave.sync.onStatus(renderSyncStatus);
 CubCave.drive.onAuthChange(function () { renderSyncStatus(CubCave.sync.status()); });
