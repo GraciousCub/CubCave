@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Cub Cave</title>
+<meta name="description" content="Personal comic reading tracker.">
+
+<link rel="manifest" href="./manifest.json">
+<link rel="stylesheet" href="./css/styles.css">
+
+<!-- Theme colour drives the browser/OS chrome around the installed app. -->
+<meta name="theme-color" content="#0f1218">
+
+<!-- iOS-specific PWA hints. iOS ignores most of manifest.json, so these matter. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Cub Cave">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
+<link rel="icon" href="./icons/favicon-32.png" sizes="32x32">
+</head>
+<body>
+
+<header class="app-bar">
+  <div class="app-bar__title">
+    <h1>The Cub Cave</h1>
+    <p class="app-bar__sub" id="shell-status">App shell &middot; Phase 1</p>
+  </div>
+  <button class="btn btn--primary" id="add-entry-btn" type="button">+ Add</button>
+</header>
+
+<nav class="tabs" id="tabs" role="tablist" aria-label="Reading lists">
+  <button class="tab is-active" role="tab" type="button" data-tab="reading" aria-selected="true" aria-controls="panel-reading" id="tab-reading">
+    Reading <span class="tab__count" data-count="reading">0</span>
+  </button>
+  <button class="tab" role="tab" type="button" data-tab="next" aria-selected="false" aria-controls="panel-next" id="tab-next">
+    Next <span class="tab__count" data-count="next">0</span>
+  </button>
+  <button class="tab" role="tab" type="button" data-tab="upcoming" aria-selected="false" aria-controls="panel-upcoming" id="tab-upcoming">
+    Upcoming <span class="tab__count" data-count="upcoming">0</span>
+  </button>
+  <button class="tab" role="tab" type="button" data-tab="read" aria-selected="false" aria-controls="panel-read" id="tab-read">
+    Read <span class="tab__count" data-count="read">0</span>
+  </button>
+</nav>
+
+<main class="content">
+
+  <section class="panel is-active" id="panel-reading" role="tabpanel" aria-labelledby="tab-reading">
+    <ul class="entry-list" data-list="reading"></ul>
+    <p class="empty" data-empty="reading">
+      Nothing in progress. Whatever you're partway through goes here &mdash; e.g. <em>Batman #14</em>.
+    </p>
+  </section>
+
+  <section class="panel" id="panel-next" role="tabpanel" aria-labelledby="tab-next" hidden>
+    <ul class="entry-list" data-list="next"></ul>
+    <p class="empty" data-empty="next">
+      The queue is empty. Issues you've got lined up to read next go here, in order.
+    </p>
+  </section>
+
+  <section class="panel" id="panel-upcoming" role="tabpanel" aria-labelledby="tab-upcoming" hidden>
+    <ul class="entry-list" data-list="upcoming"></ul>
+    <p class="empty" data-empty="upcoming">
+      Nothing on the calendar. Add issues with a release date and you'll get a notification the day they drop.
+    </p>
+  </section>
+
+  <section class="panel" id="panel-read" role="tabpanel" aria-labelledby="tab-read" hidden>
+    <ul class="entry-list" data-list="read"></ul>
+    <p class="empty" data-empty="read">
+      No finished issues yet.
+    </p>
+  </section>
+
+</main>
+
+<footer class="status-bar">
+  <span class="status-bar__dot" id="net-dot" aria-hidden="true"></span>
+  <span id="net-label">Online</span>
+  <span class="status-bar__spacer"></span>
+  <span id="install-label">Browser tab</span>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="./js/app.js"></script>
+</body>
+</html>

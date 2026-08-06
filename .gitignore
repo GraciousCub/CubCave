@@ -1,0 +1,18 @@
+# Secrets — never commit these. Cloud Function keys and any local config with
+# API keys or OAuth client secrets live outside the repo.
+.env
+.env.*
+*.key
+service-account*.json
+secrets.json
+
+# Node (used by tools/ and, later, the Cloud Function)
+node_modules/
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
