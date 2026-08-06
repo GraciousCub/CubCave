@@ -1,0 +1,18 @@
+# Files excluded from the source bundle uploaded to Google.
+#
+# .env.yaml is the important one: gcloud reads it locally for --env-vars-file,
+# but if it were also uploaded the refresh token would sit in plain text inside
+# the deployed source archive. Keep credentials out of the bundle.
+.env.yaml
+.env.yaml.example
+
+# Cloud Build runs npm install from package.json — uploading node_modules just
+# makes every deploy slower.
+node_modules/
+npm-debug.log*
+
+# Local-only test harness.
+test-local.js
+
+.git/
+.gitignore

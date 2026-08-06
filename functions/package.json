@@ -5,7 +5,7 @@
   "description": "Daily check for comics releasing today; sends a push via FCM.",
   "main": "index.js",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "scripts": {
     "start": "functions-framework --target=releaseCheck"

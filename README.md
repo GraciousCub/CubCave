@@ -219,7 +219,7 @@ gcloud services enable cloudfunctions.googleapis.com run.googleapis.com cloudbui
 ```
 
 ```bash
-gcloud functions deploy release-check --gen2 --runtime=nodejs20 --region=europe-west2 --source=./functions --entry-point=releaseCheck --trigger-http --no-allow-unauthenticated --env-vars-file=functions/.env.yaml
+gcloud functions deploy release-check --gen2 --runtime=nodejs22 --region=europe-west2 --source=./functions --entry-point=releaseCheck --trigger-http --no-allow-unauthenticated --env-vars-file=functions/.env.yaml
 ```
 
 `--no-allow-unauthenticated` matters: without it the endpoint is open to the
