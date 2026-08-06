@@ -24,7 +24,7 @@
 <header class="app-bar">
   <div class="app-bar__title">
     <h1>The Cub Cave</h1>
-    <p class="app-bar__sub" id="shell-status">App shell &middot; Phase 1</p>
+    <p class="app-bar__sub" id="shell-status">Comic reading tracker</p>
   </div>
   <button class="btn btn--primary" id="add-entry-btn" type="button">+ Add</button>
 </header>
@@ -83,8 +83,62 @@
   <span id="install-label">Browser tab</span>
 </footer>
 
+<!-- Add / edit sheet. <dialog> gives focus trapping and Esc-to-close for free. -->
+<dialog class="sheet" id="entry-dialog" aria-labelledby="dialog-title">
+  <form class="sheet__form" id="entry-form">
+    <h2 class="sheet__title" id="dialog-title">Add an issue</h2>
+
+    <label class="field">
+      <span class="field__label">Title</span>
+      <input class="field__input" type="text" id="f-title" name="title"
+             placeholder="Batman #14" required maxlength="120"
+             autocomplete="off" enterkeyhint="next">
+    </label>
+
+    <label class="field">
+      <span class="field__label">Series <span class="field__opt">optional</span></span>
+      <input class="field__input" type="text" id="f-series" name="series"
+             placeholder="Batman (2025)" maxlength="120" autocomplete="off">
+    </label>
+
+    <label class="field">
+      <span class="field__label">List</span>
+      <select class="field__input" id="f-status" name="status">
+        <option value="reading">Currently reading</option>
+        <option value="next">Reading next</option>
+        <option value="upcoming">Upcoming</option>
+        <option value="read">Read</option>
+      </select>
+    </label>
+
+    <label class="field" id="f-release-field">
+      <span class="field__label">Release date</span>
+      <input class="field__input" type="date" id="f-release" name="releaseDate">
+      <span class="field__hint" id="f-release-hint">
+        Without a date, this issue can&rsquo;t trigger a release-day notification.
+      </span>
+    </label>
+
+    <label class="field">
+      <span class="field__label">Notes <span class="field__opt">optional</span></span>
+      <textarea class="field__input" id="f-notes" name="notes" rows="2"
+                maxlength="500" placeholder="Part of the Bad Seeds crossover"></textarea>
+    </label>
+
+    <p class="sheet__error" id="form-error" hidden></p>
+
+    <div class="sheet__actions">
+      <button class="btn btn--danger" type="button" id="delete-btn" hidden>Delete</button>
+      <span class="sheet__spacer"></span>
+      <button class="btn" type="button" id="cancel-btn">Cancel</button>
+      <button class="btn btn--primary" type="submit" id="save-btn">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
+<script src="./js/store.js"></script>
 <script src="./js/app.js"></script>
 </body>
 </html>

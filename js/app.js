@@ -1,11 +1,15 @@
-/* The Cub Cave — app shell logic (Phase 1).
+/* The Cub Cave — UI layer (Phase 2).
  *
- * Scope for this phase: register the service worker, switch between the four
- * list panels, and report online/installed state. Entry data, Drive sync,
- * push and recommendations all land in later phases.
+ * Reads and writes go through CubCave.store; this file only renders and
+ * handles input. Phase 3 swaps the store's backend for Google Drive without
+ * touching anything here.
  */
 
 'use strict';
+
+(function () {
+
+var store = CubCave.store;
 
 /* ---------- service worker ---------- */
 
@@ -19,9 +23,291 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+/* ---------- dates ----------
+ * releaseDate is a plain calendar date ("2026-10-07") with no timezone.
+ * Never feed it to new Date(string) — that parses as UTC and can land on the
+ * wrong day. Always build a local date from the parts.
+ */
+
+function pad(n) { return n < 10 ? '0' + n : String(n); }
+
+function todayISO() {
+  var d = new Date();
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+function parseLocalDate(iso) {
+  var p = iso.split('-');
+  return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+}
+
+function daysUntil(iso) {
+  var ms = parseLocalDate(iso) - parseLocalDate(todayISO());
+  return Math.round(ms / 86400000);
+}
+
+function formatDay(iso) {
+  return parseLocalDate(iso).toLocaleDateString(undefined, {
+    day: 'numeric', month: 'short', year: 'numeric'
+  });
+}
+
+function formatTimestamp(isoDateTime) {
+  var d = new Date(isoDateTime);
+  if (isNaN(d)) return '';
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// Returns { text, tone } for an upcoming entry's release date.
+function describeRelease(iso) {
+  if (!iso) return { text: 'No date set', tone: 'warn' };
+  var n = daysUntil(iso);
+  if (n < 0) return { text: 'Out now · ' + formatDay(iso), tone: 'live' };
+  if (n === 0) return { text: 'Out today', tone: 'live' };
+  if (n === 1) return { text: 'Out tomorrow', tone: 'soon' };
+  if (n <= 14) return { text: 'In ' + n + ' days · ' + formatDay(iso), tone: 'soon' };
+  return { text: formatDay(iso), tone: '' };
+}
+
+/* ---------- rendering ---------- */
+
+var LIST_LABELS = {
+  reading: 'Currently reading',
+  next: 'Reading next',
+  upcoming: 'Upcoming',
+  read: 'Read'
+};
+
+function el(tag, className, text) {
+  var node = document.createElement(tag);
+  if (className) node.className = className;
+  // textContent, never innerHTML — entry titles are user input.
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function actionButton(action, id, label, options) {
+  options = options || {};
+  var btn = el('button', 'entry__btn' + (options.className ? ' ' + options.className : ''),
+                options.text || label);
+  btn.type = 'button';
+  btn.dataset.action = action;
+  btn.dataset.id = id;
+  btn.setAttribute('aria-label', label);
+  if (options.disabled) btn.disabled = true;
+  return btn;
+}
+
+function createCard(entry, index, total) {
+  var li = el('li', 'entry');
+  li.dataset.id = entry.id;
+
+  var main = el('div', 'entry__main');
+  main.appendChild(el('div', 'entry__title', entry.title));
+
+  // Meta line: series, then a status-appropriate date.
+  var bits = [];
+  if (entry.series) bits.push(entry.series);
+
+  var meta = el('div', 'entry__meta');
+  if (bits.length) meta.appendChild(document.createTextNode(bits.join(' · ')));
+
+  if (entry.status === 'upcoming') {
+    var rel = describeRelease(entry.releaseDate);
+    if (bits.length) meta.appendChild(document.createTextNode(' · '));
+    var badge = el('span', 'badge' + (rel.tone ? ' badge--' + rel.tone : ''), rel.text);
+    meta.appendChild(badge);
+  } else if (entry.status === 'read' && entry.dateRead) {
+    var stamp = 'Read ' + formatTimestamp(entry.dateRead);
+    meta.appendChild(document.createTextNode((bits.length ? ' · ' : '') + stamp));
+  }
+
+  if (meta.childNodes.length) main.appendChild(meta);
+  if (entry.notes) main.appendChild(el('div', 'entry__notes', entry.notes));
+
+  li.appendChild(main);
+
+  var actions = el('div', 'entry__actions');
+
+  if (entry.status === 'next') {
+    actions.appendChild(actionButton('up', entry.id, 'Move up',
+      { text: '↑', className: 'entry__btn--icon', disabled: index === 0 }));
+    actions.appendChild(actionButton('down', entry.id, 'Move down',
+      { text: '↓', className: 'entry__btn--icon', disabled: index === total - 1 }));
+  }
+
+  if (entry.status !== 'read') {
+    actions.appendChild(actionButton('read', entry.id, 'Mark as read',
+      { text: '✓ Read', className: 'entry__btn--go' }));
+  }
+
+  actions.appendChild(actionButton('edit', entry.id, 'Edit ' + entry.title, { text: 'Edit' }));
+
+  li.appendChild(actions);
+  return li;
+}
+
+function render() {
+  store.STATUSES.forEach(function (status) {
+    var list = document.querySelector('[data-list="' + status + '"]');
+    var entries = store.byStatus(status);
+
+    list.textContent = '';
+    entries.forEach(function (entry, i) {
+      list.appendChild(createCard(entry, i, entries.length));
+    });
+
+    var empty = document.querySelector('[data-empty="' + status + '"]');
+    if (empty) empty.hidden = entries.length > 0;
+
+    var count = document.querySelector('[data-count="' + status + '"]');
+    if (count) count.textContent = String(entries.length);
+  });
+
+  refreshReleaseNotice();
+}
+
+// A quiet heads-up on the Upcoming tab when something has already dropped —
+// the daily push (Phase 5) covers the phone, this covers opening the app.
+function refreshReleaseNotice() {
+  var due = store.byStatus('upcoming').filter(function (e) {
+    return e.releaseDate && daysUntil(e.releaseDate) <= 0;
+  });
+  var sub = document.getElementById('shell-status');
+  sub.textContent = due.length
+    ? due.length + (due.length === 1 ? ' issue is out now' : ' issues are out now')
+    : 'Comic reading tracker';
+  sub.classList.toggle('app-bar__sub--live', due.length > 0);
+}
+
+/* ---------- entry actions ---------- */
+
+document.querySelector('.content').addEventListener('click', function (event) {
+  var btn = event.target.closest('[data-action]');
+  if (!btn) return;
+
+  var id = btn.dataset.id;
+  var entry = store.find(id);
+  if (!entry) return;
+
+  switch (btn.dataset.action) {
+    case 'up':
+      store.moveInQueue(id, 'up');
+      break;
+    case 'down':
+      store.moveInQueue(id, 'down');
+      break;
+    case 'read':
+      store.markRead(id);
+      toast('Moved “' + entry.title + '” to Read.');
+      break;
+    case 'edit':
+      openForm(entry);
+      break;
+  }
+});
+
+/* ---------- add / edit form ---------- */
+
+var dialog = document.getElementById('entry-dialog');
+var form = document.getElementById('entry-form');
+var fTitle = document.getElementById('f-title');
+var fSeries = document.getElementById('f-series');
+var fStatus = document.getElementById('f-status');
+var fRelease = document.getElementById('f-release');
+var fReleaseField = document.getElementById('f-release-field');
+var fNotes = document.getElementById('f-notes');
+var formError = document.getElementById('form-error');
+var deleteBtn = document.getElementById('delete-btn');
+var dialogTitle = document.getElementById('dialog-title');
+
+var editingId = null;
+
+// The release date only means anything for Upcoming, so only show it there.
+// The stored value survives while hidden, so toggling status doesn't lose it.
+function syncReleaseVisibility() {
+  fReleaseField.hidden = fStatus.value !== 'upcoming';
+}
+
+fStatus.addEventListener('change', syncReleaseVisibility);
+
+function openForm(entry) {
+  editingId = entry ? entry.id : null;
+  formError.hidden = true;
+
+  dialogTitle.textContent = entry ? 'Edit issue' : 'Add an issue';
+  deleteBtn.hidden = !entry;
+
+  fTitle.value = entry ? entry.title : '';
+  fSeries.value = entry ? entry.series : '';
+  fNotes.value = entry ? entry.notes : '';
+  fRelease.value = entry && entry.releaseDate ? entry.releaseDate : '';
+  fStatus.value = entry ? entry.status : currentTab();
+
+  syncReleaseVisibility();
+  dialog.showModal();
+
+  // Don't autofocus on touch — it yanks the keyboard up over the sheet.
+  if (!window.matchMedia('(pointer: coarse)').matches) fTitle.focus();
+}
+
+form.addEventListener('submit', function (event) {
+  event.preventDefault();
+
+  var title = fTitle.value.trim();
+  if (!title) {
+    formError.textContent = 'Give the issue a title.';
+    formError.hidden = false;
+    fTitle.focus();
+    return;
+  }
+
+  var fields = {
+    title: title,
+    series: fSeries.value.trim(),
+    status: fStatus.value,
+    releaseDate: fRelease.value || null,
+    notes: fNotes.value.trim()
+  };
+
+  if (editingId) {
+    store.update(editingId, fields);
+    toast('Saved.');
+  } else {
+    store.add(fields);
+    toast('Added to ' + LIST_LABELS[fields.status] + '.');
+    // Follow the entry to wherever it landed.
+    selectTab(fields.status);
+  }
+
+  dialog.close();
+});
+
+deleteBtn.addEventListener('click', function () {
+  var entry = store.find(editingId);
+  if (!entry) return;
+  if (!window.confirm('Delete “' + entry.title + '”? This cannot be undone.')) return;
+  store.remove(editingId);
+  dialog.close();
+  toast('Deleted.');
+});
+
+document.getElementById('cancel-btn').addEventListener('click', function () {
+  dialog.close();
+});
+
+document.getElementById('add-entry-btn').addEventListener('click', function () {
+  openForm(null);
+});
+
 /* ---------- tabs ---------- */
 
 var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+
+function currentTab() {
+  var active = document.querySelector('.tab.is-active');
+  return active ? active.dataset.tab : 'reading';
+}
 
 function selectTab(name) {
   tabs.forEach(function (tab) {
@@ -42,41 +328,7 @@ function selectTab(name) {
 }
 
 tabs.forEach(function (tab) {
-  tab.addEventListener('click', function () {
-    selectTab(tab.dataset.tab);
-  });
-});
-
-var savedTab = null;
-try {
-  savedTab = localStorage.getItem('cubcave.tab');
-} catch (err) { /* ignore */ }
-
-if (savedTab && document.getElementById('panel-' + savedTab)) {
-  selectTab(savedTab);
-}
-
-/* ---------- empty states ---------- */
-
-// Phase 1 has no entries, so every list is empty. Phase 2 replaces this with
-// a real render pass driven by the entry data.
-function refreshEmptyStates() {
-  document.querySelectorAll('.entry-list').forEach(function (list) {
-    var name = list.dataset.list;
-    var count = list.children.length;
-    var empty = document.querySelector('[data-empty="' + name + '"]');
-    var badge = document.querySelector('[data-count="' + name + '"]');
-    if (empty) empty.hidden = count > 0;
-    if (badge) badge.textContent = String(count);
-  });
-}
-
-refreshEmptyStates();
-
-/* ---------- placeholder actions ---------- */
-
-document.getElementById('add-entry-btn').addEventListener('click', function () {
-  toast('Adding entries arrives in Phase 2.');
+  tab.addEventListener('click', function () { selectTab(tab.dataset.tab); });
 });
 
 /* ---------- online / installed state ---------- */
@@ -113,7 +365,29 @@ function toast(message) {
   toastEl.textContent = message;
   toastEl.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(function () {
-    toastEl.hidden = true;
-  }, 2600);
+  toastTimer = setTimeout(function () { toastEl.hidden = true; }, 2600);
 }
+
+/* ---------- boot ---------- */
+
+store.subscribe(render);
+store.load();
+
+var savedTab = null;
+try {
+  savedTab = localStorage.getItem('cubcave.tab');
+} catch (err) { /* ignore */ }
+
+if (savedTab && document.getElementById('panel-' + savedTab)) selectTab(savedTab);
+
+render();
+
+// Dates drift while the app sits open on a phone for days; recheck on return.
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden) render();
+});
+
+// Flush any debounced write before the app is backgrounded or closed.
+window.addEventListener('pagehide', function () { store.saveNow(); });
+
+})();

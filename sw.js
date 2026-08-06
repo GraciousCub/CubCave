@@ -8,12 +8,13 @@
 
 'use strict';
 
-var CACHE_VERSION = 'cubcave-shell-v1';
+var CACHE_VERSION = 'cubcave-shell-v2';
 
 var SHELL_FILES = [
   './',
   './index.html',
   './css/styles.css',
+  './js/store.js',
   './js/app.js',
   './manifest.json',
   './icons/icon-192.png',

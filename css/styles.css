@@ -170,22 +170,92 @@ body {
 
 .empty em { color: var(--text); font-style: normal; }
 
-/* Entry cards are populated in Phase 2; the shape is defined here so the
-   list has somewhere to land. */
+/* ---------- entry cards ---------- */
+
 .entry {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--bg-raised);
 }
 
-.entry__title { font-weight: 600; }
+.entry__main { min-width: 0; }
+
+.entry__title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 
 .entry__meta {
-  margin-top: 2px;
+  margin-top: 3px;
   font-size: 13px;
   color: var(--text-dim);
+  overflow-wrap: anywhere;
 }
+
+.entry__notes {
+  margin-top: 6px;
+  padding-left: 9px;
+  border-left: 2px solid var(--line);
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.entry__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.entry__btn {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.entry__btn:disabled { opacity: 0.35; cursor: default; }
+.entry__btn:not(:disabled):active { transform: translateY(1px); }
+
+.entry__btn--icon {
+  min-width: 38px;
+  padding: 0;
+  font-size: 15px;
+}
+
+.entry__btn--go { color: var(--green); border-color: rgba(87, 199, 138, 0.35); }
+
+/* Push Edit to the far end so the destructive-ish actions aren't adjacent. */
+.entry__actions .entry__btn:last-child { margin-left: auto; }
+
+/* ---------- release-date badges ---------- */
+
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.badge--live { background: rgba(87, 199, 138, 0.16); color: var(--green); }
+.badge--soon { background: rgba(78, 168, 222, 0.16); color: var(--blue); }
+.badge--warn { background: rgba(224, 82, 99, 0.14); color: var(--red); }
+
+.app-bar__sub--live { color: var(--green); font-weight: 600; }
 
 /* ---------- status bar ---------- */
 
@@ -210,6 +280,102 @@ body {
 }
 
 .status-bar.is-offline .status-bar__dot { background: var(--red); }
+
+/* ---------- add / edit sheet ---------- */
+
+/* Bottom sheet on phones: thumb-reachable, and it doesn't fight the keyboard. */
+.sheet {
+  width: 100%;
+  max-width: 520px;
+  margin: auto auto 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.sheet::backdrop { background: rgba(0, 0, 0, 0.6); }
+
+.sheet__form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 16px calc(var(--safe-bottom) + 18px);
+  /* Cap the height so a long form still scrolls above the keyboard. */
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.sheet__title {
+  margin: 0;
+  font-size: 17px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field[hidden] { display: none; }
+
+.field__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.field__opt { font-weight: 400; opacity: 0.7; }
+
+.field__input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  /* 16px minimum stops iOS Safari zooming in on focus. */
+  font-size: 16px;
+}
+
+.field__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+textarea.field__input { resize: vertical; min-height: 60px; }
+
+.field__hint {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.sheet__error {
+  margin: 0;
+  color: var(--red);
+  font-size: 13px;
+}
+
+.sheet__error[hidden] { display: none; }
+
+.sheet__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.sheet__spacer { flex: 1; }
+
+.btn--danger {
+  color: var(--red);
+  border-color: rgba(224, 82, 99, 0.4);
+}
+
+.btn[hidden] { display: none; }
 
 /* ---------- toast ---------- */
 
