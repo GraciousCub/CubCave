@@ -331,20 +331,65 @@ tabs.forEach(function (tab) {
   tab.addEventListener('click', function () { selectTab(tab.dataset.tab); });
 });
 
-/* ---------- online / installed state ---------- */
+/* ---------- sync status ---------- */
 
 var statusBar = document.querySelector('.status-bar');
-var netLabel = document.getElementById('net-label');
+var syncLabel = document.getElementById('sync-label');
+var authBtn = document.getElementById('auth-btn');
+var notice = document.getElementById('notice');
+var noticeText = document.getElementById('notice-text');
+var noticeBtn = document.getElementById('notice-btn');
 
-function refreshNetState() {
-  var online = navigator.onLine;
-  statusBar.classList.toggle('is-offline', !online);
-  netLabel.textContent = online ? 'Online' : 'Offline';
+function showNotice(text, actionLabel, action) {
+  noticeText.textContent = text;
+  if (actionLabel) {
+    noticeBtn.textContent = actionLabel;
+    noticeBtn.hidden = false;
+    noticeBtn.onclick = action;
+  } else {
+    noticeBtn.hidden = true;
+    noticeBtn.onclick = null;
+  }
+  notice.hidden = false;
 }
 
-window.addEventListener('online', refreshNetState);
-window.addEventListener('offline', refreshNetState);
-refreshNetState();
+function hideNotice() {
+  notice.hidden = true;
+  noticeBtn.onclick = null;
+}
+
+function renderSyncStatus(state) {
+  statusBar.dataset.status = state.status;
+  syncLabel.textContent = state.message || state.status;
+
+  // The sign-in button only appears when signing in would actually help.
+  var signedOut = state.status === 'signed-out';
+  authBtn.hidden = !(signedOut || CubCave.drive.isSignedIn());
+  authBtn.textContent = signedOut ? 'Sign in' : 'Sign out';
+
+  if (state.status === 'unconfigured') {
+    showNotice(
+      'Google Drive sync is not set up yet. Add your OAuth Client ID to ' +
+      'js/config.js — until then, entries are saved on this device only.'
+    );
+  } else if (state.status === 'error') {
+    showNotice(state.message, 'Retry', function () {
+      hideNotice();
+      CubCave.sync.reconcile();
+    });
+  } else {
+    hideNotice();
+  }
+}
+
+authBtn.addEventListener('click', function () {
+  if (CubCave.drive.isSignedIn()) {
+    if (!window.confirm('Sign out? Your data stays in Drive, but is cleared from this device.')) return;
+    CubCave.sync.signOut();
+  } else {
+    CubCave.sync.signIn();
+  }
+});
 
 // Standalone detection: matchMedia covers Android/desktop, navigator.standalone
 // is the iOS Safari equivalent. Phase 4 needs this, because iOS only allows
@@ -353,8 +398,7 @@ var isStandalone =
   window.matchMedia('(display-mode: standalone)').matches ||
   window.navigator.standalone === true;
 
-document.getElementById('install-label').textContent =
-  isStandalone ? 'Installed' : 'Browser tab';
+document.getElementById('install-label').hidden = !isStandalone;
 
 /* ---------- toast ---------- */
 
@@ -371,6 +415,9 @@ function toast(message) {
 /* ---------- boot ---------- */
 
 store.subscribe(render);
+
+// Paint from the local mirror first so the app is usable immediately, then
+// let sync reconcile with Drive in the background.
 store.load();
 
 var savedTab = null;
@@ -381,6 +428,21 @@ try {
 if (savedTab && document.getElementById('panel-' + savedTab)) selectTab(savedTab);
 
 render();
+
+CubCave.sync.onStatus(renderSyncStatus);
+CubCave.drive.onAuthChange(function () { renderSyncStatus(CubCave.sync.status()); });
+
+// The Google script is async, so wait for it before starting sync.
+var gisScript = document.getElementById('gis-script');
+if (CubCave.drive.gisLoaded()) {
+  CubCave.sync.start();
+} else {
+  gisScript.addEventListener('load', function () { CubCave.sync.start(); });
+  gisScript.addEventListener('error', function () {
+    // Offline or blocked: the app still works, backed by the local mirror.
+    CubCave.sync.start();
+  });
+}
 
 // Dates drift while the app sits open on a phone for days; recheck on return.
 document.addEventListener('visibilitychange', function () {

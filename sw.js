@@ -8,18 +8,33 @@
 
 'use strict';
 
-var CACHE_VERSION = 'cubcave-shell-v2';
+var CACHE_VERSION = 'cubcave-shell-v5';
 
 var SHELL_FILES = [
   './',
   './index.html',
   './css/styles.css',
+  './js/config.js',
   './js/store.js',
+  './js/drive.js',
+  './js/sync.js',
   './js/app.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
+
+// config.js holds the OAuth Client ID and is the file most likely to be edited
+// without a CACHE_VERSION bump. Always try the network for it first, so a
+// freshly deployed Client ID takes effect immediately instead of being masked
+// by a cached empty config.
+var NETWORK_FIRST = ['/js/config.js'];
+
+function isNetworkFirst(pathname) {
+  return NETWORK_FIRST.some(function (suffix) {
+    return pathname.endsWith(suffix);
+  });
+}
 
 self.addEventListener('install', function (event) {
   event.waitUntil(
@@ -58,6 +73,22 @@ self.addEventListener('fetch', function (event) {
     event.respondWith(
       fetch(request).catch(function () {
         return caches.match('./index.html');
+      })
+    );
+    return;
+  }
+
+  // Config: network first, cache only as an offline fallback.
+  if (isNetworkFirst(url.pathname)) {
+    event.respondWith(
+      fetch(request).then(function (response) {
+        if (response && response.ok) {
+          var copy = response.clone();
+          caches.open(CACHE_VERSION).then(function (cache) { cache.put(request, copy); });
+        }
+        return response;
+      }).catch(function () {
+        return caches.match(request);
       })
     );
     return;

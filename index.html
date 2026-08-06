@@ -46,6 +46,12 @@
 
 <main class="content">
 
+  <div class="notice" id="notice" hidden>
+    <span class="notice__text" id="notice-text"></span>
+    <button class="notice__btn" type="button" id="notice-btn" hidden></button>
+  </div>
+
+
   <section class="panel is-active" id="panel-reading" role="tabpanel" aria-labelledby="tab-reading">
     <ul class="entry-list" data-list="reading"></ul>
     <p class="empty" data-empty="reading">
@@ -77,10 +83,11 @@
 </main>
 
 <footer class="status-bar">
-  <span class="status-bar__dot" id="net-dot" aria-hidden="true"></span>
-  <span id="net-label">Online</span>
+  <span class="status-bar__dot" id="sync-dot" aria-hidden="true"></span>
+  <span id="sync-label">Starting&hellip;</span>
   <span class="status-bar__spacer"></span>
-  <span id="install-label">Browser tab</span>
+  <span class="status-bar__tag" id="install-label" hidden>Installed</span>
+  <button class="status-bar__btn" id="auth-btn" type="button" hidden>Sign in</button>
 </footer>
 
 <!-- Add / edit sheet. <dialog> gives focus trapping and Esc-to-close for free. -->
@@ -138,7 +145,13 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
+<!-- Google Identity Services: issues the OAuth access token for Drive. -->
+<script src="https://accounts.google.com/gsi/client" id="gis-script" async defer></script>
+
+<script src="./js/config.js"></script>
 <script src="./js/store.js"></script>
+<script src="./js/drive.js"></script>
+<script src="./js/sync.js"></script>
 <script src="./js/app.js"></script>
 </body>
 </html>

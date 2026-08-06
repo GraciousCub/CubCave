@@ -1,13 +1,20 @@
-/* The Cub Cave — data store (Phase 2: localStorage).
+/* The Cub Cave — data store.
  *
- * Everything that touches entry data goes through here, so Phase 3 only has to
- * replace readRaw/writeRaw with Google Drive calls — the UI never changes.
+ * Everything that touches entry data goes through here.
+ *
+ * Since Phase 3, Google Drive is the source of truth and localStorage is a
+ * local mirror: writes hit the mirror synchronously (so the app stays usable
+ * offline and repaints instantly) while CubCave.sync pushes the same data up
+ * to Drive in the background. This module knows nothing about Drive — it just
+ * announces local changes and lets sync deal with the network.
  *
  * On-disk shape (matches the agreed schema):
  *   {
  *     "entries": [{ id, title, series, status, releaseDate, notes,
  *                   dateAdded, dateRead, sortOrder }],
- *     "pushSubscription": { fcmToken, registeredAt } | null
+ *     "pushSubscription": { fcmToken, registeredAt } | null,
+ *     "updatedAt": "2026-08-06T00:00:00Z",
+ *     "schemaVersion": 1
  *   }
  */
 
@@ -19,13 +26,20 @@ CubCave.store = (function () {
 
   var STORAGE_KEY = 'cubcave.data.v1';
   var STATUSES = ['reading', 'next', 'upcoming', 'read'];
+  var SCHEMA_VERSION = 1;
 
   var data = emptyData();
-  var listeners = [];
+  var listeners = [];        // re-render hooks
+  var localListeners = [];   // "the user changed something" hooks (sync)
   var saveTimer = null;
 
   function emptyData() {
-    return { entries: [], pushSubscription: null };
+    return {
+      entries: [],
+      pushSubscription: null,
+      updatedAt: null,
+      schemaVersion: SCHEMA_VERSION
+    };
   }
 
   function uid() {
@@ -88,6 +102,7 @@ CubCave.store = (function () {
     if (parsed.pushSubscription && typeof parsed.pushSubscription === 'object') {
       clean.pushSubscription = parsed.pushSubscription;
     }
+    if (typeof parsed.updatedAt === 'string') clean.updatedAt = parsed.updatedAt;
     return clean;
   }
 
@@ -123,13 +138,48 @@ CubCave.store = (function () {
 
   /* ---------- change notification ---------- */
 
+  // Re-render hooks: fire for any data change, local or pulled from Drive.
   function subscribe(fn) {
     listeners.push(fn);
   }
 
+  // Local-change hooks: fire only for user edits, so sync can push to Drive.
+  // Pulls from Drive deliberately skip these, otherwise every pull would
+  // trigger a push straight back up.
+  function onLocalChange(fn) {
+    localListeners.push(fn);
+  }
+
   function changed() {
+    data.updatedAt = nowISO();
     save();
     listeners.forEach(function (fn) { fn(); });
+    localListeners.forEach(function (fn) { fn(); });
+  }
+
+  /* ---------- whole-document access (used by sync) ---------- */
+
+  function snapshot() {
+    return {
+      entries: data.entries.slice(),
+      pushSubscription: data.pushSubscription,
+      // A file created before any edit has no updatedAt yet; stamp it now so
+      // the document on Drive always carries a real timestamp.
+      updatedAt: data.updatedAt || nowISO(),
+      schemaVersion: SCHEMA_VERSION
+    };
+  }
+
+  // Replace everything with a document pulled from Drive. Re-renders, but
+  // does not mark the data dirty.
+  function replaceAll(parsed) {
+    data = normalize(parsed);
+    saveNow();
+    listeners.forEach(function (fn) { fn(); });
+  }
+
+  function updatedAt() {
+    return data.updatedAt;
   }
 
   /* ---------- reads ---------- */
@@ -283,6 +333,10 @@ CubCave.store = (function () {
     load: load,
     saveNow: saveNow,
     subscribe: subscribe,
+    onLocalChange: onLocalChange,
+    snapshot: snapshot,
+    replaceAll: replaceAll,
+    updatedAt: updatedAt,
     all: all,
     find: find,
     byStatus: byStatus,

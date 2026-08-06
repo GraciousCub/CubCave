@@ -273,13 +273,86 @@ body {
 .status-bar__spacer { flex: 1; }
 
 .status-bar__dot {
+  flex-shrink: 0;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--text-dim);
 }
 
-.status-bar.is-offline .status-bar__dot { background: var(--red); }
+#sync-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dot colour tracks the sync state. */
+.status-bar[data-status="synced"] .status-bar__dot { background: var(--green); }
+.status-bar[data-status="syncing"] .status-bar__dot,
+.status-bar[data-status="pending"] .status-bar__dot { background: var(--blue); }
+.status-bar[data-status="offline"] .status-bar__dot,
+.status-bar[data-status="error"] .status-bar__dot,
+.status-bar[data-status="unconfigured"] .status-bar__dot { background: var(--red); }
+
+.status-bar__tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--green);
+  font-weight: 600;
+}
+
+.status-bar__tag[hidden] { display: none; }
+
+.status-bar__btn {
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.status-bar__btn[hidden] { display: none; }
+
+/* ---------- notice bar ---------- */
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 11px 13px;
+  border: 1px solid rgba(224, 82, 99, 0.35);
+  border-radius: var(--radius);
+  background: rgba(224, 82, 99, 0.1);
+  font-size: 13px;
+}
+
+.notice[hidden] { display: none; }
+
+.notice__text { flex: 1; }
+
+.notice__btn {
+  flex-shrink: 0;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.notice__btn[hidden] { display: none; }
 
 /* ---------- add / edit sheet ---------- */
 
