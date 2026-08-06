@@ -136,6 +136,19 @@ function createCard(entry, index, total) {
       { text: '↓', className: 'entry__btn--icon', disabled: index === total - 1 }));
   }
 
+  // One-tap moves along the natural path of a comic: upcoming → queue →
+  // reading → read, plus a way back out of Read.
+  if (entry.status === 'upcoming') {
+    actions.appendChild(actionButton('queue', entry.id, 'Move to Reading next',
+      { text: '→ Queue' }));
+  } else if (entry.status === 'next') {
+    actions.appendChild(actionButton('start', entry.id, 'Start reading now',
+      { text: '▶ Start' }));
+  } else if (entry.status === 'read') {
+    actions.appendChild(actionButton('unread', entry.id, 'Move back to Currently reading',
+      { text: '↩ Unread' }));
+  }
+
   if (entry.status !== 'read') {
     actions.appendChild(actionButton('read', entry.id, 'Mark as read',
       { text: '✓ Read', className: 'entry__btn--go' }));
@@ -201,6 +214,20 @@ document.querySelector('.content').addEventListener('click', function (event) {
       store.markRead(id);
       toast('Moved “' + entry.title + '” to Read.');
       break;
+    case 'queue':
+      store.update(id, { status: 'next' });
+      toast('Added to the queue.');
+      break;
+    case 'start':
+      store.update(id, { status: 'reading' });
+      toast('Now reading “' + entry.title + '”.');
+      break;
+    case 'unread':
+      // update() clears dateRead on the way out of Read, so the entry doesn't
+      // keep a stale "finished on" stamp.
+      store.update(id, { status: 'reading' });
+      toast('Moved back to Currently reading.');
+      break;
     case 'edit':
       openForm(entry);
       break;
@@ -234,6 +261,7 @@ fStatus.addEventListener('change', syncReleaseVisibility);
 function openForm(entry) {
   editingId = entry ? entry.id : null;
   formError.hidden = true;
+  disarmDelete();
 
   dialogTitle.textContent = entry ? 'Edit issue' : 'Add an issue';
   deleteBtn.hidden = !entry;
@@ -283,13 +311,41 @@ form.addEventListener('submit', function (event) {
   dialog.close();
 });
 
+/* Delete is a two-step button rather than a native confirm().
+ *
+ * window.confirm() silently returns false once a browser decides to suppress
+ * page dialogs (Chrome's "prevent additional dialogs" tick-box), and it is
+ * unreliable over a modal <dialog> in an installed PWA. That made Delete look
+ * broken: the click registered, the confirm never appeared, nothing happened.
+ * Arming the button keeps the safety step but relies only on our own UI. */
+
+var deleteArmed = false;
+var deleteTimer = null;
+
+function disarmDelete() {
+  deleteArmed = false;
+  clearTimeout(deleteTimer);
+  deleteBtn.textContent = 'Delete';
+  deleteBtn.classList.remove('btn--armed');
+}
+
 deleteBtn.addEventListener('click', function () {
   var entry = store.find(editingId);
   if (!entry) return;
-  if (!window.confirm('Delete “' + entry.title + '”? This cannot be undone.')) return;
+
+  if (!deleteArmed) {
+    deleteArmed = true;
+    deleteBtn.textContent = 'Tap again to delete';
+    deleteBtn.classList.add('btn--armed');
+    // Don't leave it armed indefinitely.
+    deleteTimer = setTimeout(disarmDelete, 5000);
+    return;
+  }
+
+  disarmDelete();
   store.remove(editingId);
   dialog.close();
-  toast('Deleted.');
+  toast('Deleted “' + entry.title + '”.');
 });
 
 document.getElementById('cancel-btn').addEventListener('click', function () {
@@ -340,7 +396,11 @@ var notice = document.getElementById('notice');
 var noticeText = document.getElementById('notice-text');
 var noticeBtn = document.getElementById('notice-btn');
 
-function showNotice(text, actionLabel, action) {
+// While a notice is awaiting a decision, incoming sync-status updates must not
+// yank it off screen mid-tap.
+var noticeLocked = false;
+
+function showNotice(text, actionLabel, action, lock) {
   noticeText.textContent = text;
   if (actionLabel) {
     noticeBtn.textContent = actionLabel;
@@ -350,10 +410,13 @@ function showNotice(text, actionLabel, action) {
     noticeBtn.hidden = true;
     noticeBtn.onclick = null;
   }
+  noticeLocked = !!lock;
   notice.hidden = false;
 }
 
-function hideNotice() {
+function hideNotice(force) {
+  if (noticeLocked && !force) return;
+  noticeLocked = false;
   notice.hidden = true;
   noticeBtn.onclick = null;
 }
@@ -383,9 +446,22 @@ function renderSyncStatus(state) {
 }
 
 authBtn.addEventListener('click', function () {
+  // Tapping again while the confirmation is up cancels it.
+  if (noticeLocked) {
+    hideNotice(true);
+    return;
+  }
   if (CubCave.drive.isSignedIn()) {
-    if (!window.confirm('Sign out? Your data stays in Drive, but is cleared from this device.')) return;
-    CubCave.sync.signOut();
+    // Same reasoning as Delete: confirm in our own UI, not a native dialog.
+    showNotice(
+      'Sign out? Your data stays in Drive, but is cleared from this device.',
+      'Sign out',
+      function () {
+        hideNotice(true);
+        CubCave.sync.signOut();
+      },
+      true
+    );
   } else {
     CubCave.sync.signIn();
   }

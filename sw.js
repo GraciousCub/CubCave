@@ -8,7 +8,7 @@
 
 'use strict';
 
-var CACHE_VERSION = 'cubcave-shell-v5';
+var CACHE_VERSION = 'cubcave-shell-v6';
 
 var SHELL_FILES = [
   './',

@@ -448,6 +448,13 @@ textarea.field__input { resize: vertical; min-height: 60px; }
   border-color: rgba(224, 82, 99, 0.4);
 }
 
+/* Armed state for the two-step delete — unmistakably different from resting. */
+.btn--armed {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
 .btn[hidden] { display: none; }
 
 /* ---------- toast ---------- */
