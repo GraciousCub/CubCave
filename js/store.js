@@ -36,7 +36,9 @@ CubCave.store = (function () {
   function emptyData() {
     return {
       entries: [],
-      pushSubscription: null,
+      // A list, so every device you enable notifications on gets alerted —
+      // not just the most recent one.
+      pushSubscriptions: [],
       updatedAt: null,
       schemaVersion: SCHEMA_VERSION
     };
@@ -99,9 +101,20 @@ CubCave.store = (function () {
         };
       });
 
-    if (parsed.pushSubscription && typeof parsed.pushSubscription === 'object') {
-      clean.pushSubscription = parsed.pushSubscription;
+    if (Array.isArray(parsed.pushSubscriptions)) {
+      clean.pushSubscriptions = parsed.pushSubscriptions.filter(function (s) {
+        return s && typeof s.fcmToken === 'string' && s.fcmToken;
+      });
+    } else if (parsed.pushSubscription && typeof parsed.pushSubscription.fcmToken === 'string') {
+      // Migrate the original single-token shape. A document written before
+      // this change still has to load — it's already sitting in Drive.
+      clean.pushSubscriptions = [{
+        fcmToken: parsed.pushSubscription.fcmToken,
+        registeredAt: parsed.pushSubscription.registeredAt || nowISO(),
+        label: parsed.pushSubscription.label || 'Migrated device'
+      }];
     }
+
     if (typeof parsed.updatedAt === 'string') clean.updatedAt = parsed.updatedAt;
     return clean;
   }
@@ -162,7 +175,7 @@ CubCave.store = (function () {
   function snapshot() {
     return {
       entries: data.entries.slice(),
-      pushSubscription: data.pushSubscription,
+      pushSubscriptions: data.pushSubscriptions.slice(),
       // A file created before any edit has no updatedAt yet; stamp it now so
       // the document on Drive always carries a real timestamp.
       updatedAt: data.updatedAt || nowISO(),
@@ -317,15 +330,46 @@ CubCave.store = (function () {
     changed();
   }
 
-  /* ---------- push subscription (used from Phase 4) ---------- */
+  /* ---------- push subscriptions ---------- */
 
-  function getPushSubscription() {
-    return data.pushSubscription;
+  function getPushSubscriptions() {
+    return data.pushSubscriptions.slice();
   }
 
-  function setPushSubscription(sub) {
-    data.pushSubscription = sub;
+  function findSubscription(token) {
+    for (var i = 0; i < data.pushSubscriptions.length; i++) {
+      if (data.pushSubscriptions[i].fcmToken === token) return data.pushSubscriptions[i];
+    }
+    return null;
+  }
+
+  // Registering the same device twice must not create a duplicate — FCM
+  // tokens are stable until they rotate, so this is the common case.
+  function addPushSubscription(token, label) {
+    if (!token) return;
+    var existing = findSubscription(token);
+    if (existing) {
+      existing.lastSeenAt = nowISO();
+      if (label) existing.label = label;
+    } else {
+      data.pushSubscriptions.push({
+        fcmToken: token,
+        label: label || 'This device',
+        registeredAt: nowISO(),
+        lastSeenAt: nowISO()
+      });
+    }
     changed();
+  }
+
+  // Phase 5 calls this when FCM reports a token as permanently invalid, so
+  // dead devices don't accumulate forever.
+  function removePushSubscription(token) {
+    var before = data.pushSubscriptions.length;
+    data.pushSubscriptions = data.pushSubscriptions.filter(function (s) {
+      return s.fcmToken !== token;
+    });
+    if (data.pushSubscriptions.length !== before) changed();
   }
 
   return {
@@ -345,7 +389,8 @@ CubCave.store = (function () {
     markRead: markRead,
     remove: remove,
     moveInQueue: moveInQueue,
-    getPushSubscription: getPushSubscription,
-    setPushSubscription: setPushSubscription
+    getPushSubscriptions: getPushSubscriptions,
+    addPushSubscription: addPushSubscription,
+    removePushSubscription: removePushSubscription
   };
 })();

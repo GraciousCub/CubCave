@@ -441,6 +441,16 @@ function renderPushCard() {
     : 'Release-day notifications';
   pushText.textContent = copy.text;
 
+  // With several devices registered, say so — otherwise it's invisible that
+  // your laptop is still on the list after enabling on a phone.
+  if (state === 'enabled') {
+    var others = CubCave.push.registeredDeviceCount() - 1;
+    if (others > 0) {
+      pushText.textContent = copy.text + ' ' + others +
+        (others === 1 ? ' other device is' : ' other devices are') + ' also registered.';
+    }
+  }
+
   pushBtn.hidden = !copy.button;
   if (copy.button) pushBtn.textContent = copy.button;
 
@@ -458,10 +468,26 @@ pushBtn.addEventListener('click', function () {
     renderPushCard();
   }).catch(function (err) {
     var reason = err && err.message;
-    if (reason === 'dismissed') toast('Permission dismissed — tap Enable to try again.');
-    else if (reason === 'denied') toast('Notifications blocked in browser settings.');
-    else if (reason === 'no-token') toast('Google didn\'t return a token. Try again.');
-    else toast('Could not enable notifications: ' + reason);
+    if (reason === 'dismissed') {
+      toast('Permission dismissed — tap Enable to try again.');
+    } else if (reason === 'denied') {
+      toast('Notifications blocked in browser settings.');
+    } else if (reason === 'no-token') {
+      toast('Google didn\'t return a token. Try again.');
+    } else if (/push service error|AbortError/i.test(reason || '')) {
+      // The browser's push service refused. Usually Brave or Chromium with
+      // Google push messaging switched off, or a blocked network.
+      renderPushCard();
+      showNotice(
+        'Your browser refused to register for push. This is usually a browser ' +
+        'setting rather than a fault in the app — Brave and some Chromium ' +
+        'builds disable Google push messaging by default. Try another browser ' +
+        'to confirm.'
+      );
+      return;
+    } else {
+      toast('Could not enable notifications: ' + reason);
+    }
     renderPushCard();
   }).then(function () {
     pushBtn.disabled = false;
@@ -470,8 +496,28 @@ pushBtn.addEventListener('click', function () {
 
 pushTestBtn.addEventListener('click', function () {
   CubCave.push.sendTestNotification()
-    .then(function () { toast('Test notification sent.'); })
-    .catch(function (err) { toast('Test failed: ' + (err && err.message)); });
+    .then(function (shown) {
+      if (shown) {
+        toast('Test notification sent.');
+      } else {
+        // The browser accepted it but nothing appeared — that's the operating
+        // system suppressing it, not the app failing.
+        showNotice(
+          'The notification was sent but your system didn\'t display it. ' +
+          'Check Do Not Disturb / Focus assist, and that notifications are ' +
+          'allowed for this browser in Windows Settings → Notifications.'
+        );
+      }
+    })
+    .catch(function (err) {
+      var reason = (err && err.message) || '';
+      if (reason.indexOf('permission-') === 0) {
+        toast('Notification permission is ' + reason.slice(11) + '.');
+        renderPushCard();
+      } else {
+        toast('Test failed: ' + reason);
+      }
+    });
 });
 
 CubCave.push.onChange(renderPushCard);

@@ -2,9 +2,14 @@
 # API keys or OAuth client secrets live outside the repo.
 .env
 .env.*
+!.env.yaml.example
 *.key
 service-account*.json
 secrets.json
+
+# The deploy-time config for the Cloud Function: contains the OAuth refresh
+# token, which grants ongoing access to the Drive app folder.
+functions/.env.yaml
 
 # Node (used by tools/ and, later, the Cloud Function)
 node_modules/

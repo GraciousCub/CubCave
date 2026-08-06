@@ -69,9 +69,48 @@ CubCave.push = (function () {
     return ('Notification' in window) ? Notification.permission : 'unsupported';
   }
 
+  var DEVICE_TOKEN_KEY = 'cubcave.deviceToken.v1';
+
+  /* The Drive document holds tokens for every device. To decide whether THIS
+   * device is registered we need to know which of them is ours, so the token
+   * is also kept locally. It is a delivery address, not a credential — it
+   * grants no access to anything. */
+  function deviceToken() {
+    try { return localStorage.getItem(DEVICE_TOKEN_KEY); } catch (err) { return null; }
+  }
+
+  function rememberDeviceToken(token) {
+    try { localStorage.setItem(DEVICE_TOKEN_KEY, token); } catch (err) { /* non-fatal */ }
+  }
+
   function savedToken() {
-    var sub = store.getPushSubscription();
-    return (sub && sub.fcmToken) || null;
+    var token = deviceToken();
+    if (!token) return null;
+    var known = store.getPushSubscriptions().some(function (s) {
+      return s.fcmToken === token;
+    });
+    return known ? token : null;
+  }
+
+  function registeredDeviceCount() {
+    return store.getPushSubscriptions().length;
+  }
+
+  // A rough, human-readable name so a list of tokens isn't unreadable.
+  function deviceLabel() {
+    var ua = navigator.userAgent;
+    var os = /iPhone|iPad|iPod/.test(ua) ? 'iPhone/iPad'
+           : /Android/.test(ua) ? 'Android'
+           : /Mac OS X/.test(ua) ? 'Mac'
+           : /Windows/.test(ua) ? 'Windows'
+           : 'Device';
+    var browser = /Edg\//.test(ua) ? 'Edge'
+                : /OPR\/|Opera/.test(ua) ? 'Opera'
+                : /Firefox/.test(ua) ? 'Firefox'
+                : /Chrome/.test(ua) ? 'Chrome'
+                : /Safari/.test(ua) ? 'Safari'
+                : 'Browser';
+    return os + ' · ' + browser + (isStandalone() ? ' (installed)' : '');
   }
 
   // A single value the UI can switch on.
@@ -134,6 +173,46 @@ CubCave.push = (function () {
     });
   }
 
+  /* ---------- stale subscription cleanup ---------- */
+
+  /* A browser refuses to create a push subscription when one already exists
+   * for this origin under a DIFFERENT applicationServerKey — it fails with
+   * "Registration failed - push service error", which says nothing useful.
+   * That happens after regenerating a VAPID key pair, or from a leftover
+   * subscription created by earlier testing. Clearing the mismatched one first
+   * makes Enable work instead of dead-ending. */
+
+  function urlBase64ToUint8Array(value) {
+    var padding = '='.repeat((4 - (value.length % 4)) % 4);
+    var base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
+    var raw = atob(base64);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  function sameKey(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // force:true drops any subscription at all, not just a mismatched one.
+  function clearConflictingSubscription(registration, force) {
+    return registration.pushManager.getSubscription().then(function (sub) {
+      if (!sub) return false;
+      if (!force) {
+        var existing = sub.options && sub.options.applicationServerKey;
+        var wanted;
+        try { wanted = urlBase64ToUint8Array(CubCave.config.vapidKey); } catch (err) { wanted = null; }
+        if (existing && wanted && sameKey(new Uint8Array(existing), wanted)) return false;
+      }
+      return sub.unsubscribe().then(function () { return true; });
+    }).catch(function () {
+      return false;   // best effort; the retry below is the real safety net
+    });
+  }
+
   /* ---------- enable ---------- */
 
   // Must be called from a user gesture.
@@ -156,10 +235,21 @@ CubCave.push = (function () {
       // means one cache and one push handler.
       return navigator.serviceWorker.ready;
     }).then(function (registration) {
-      return messaging.getToken({
-        vapidKey: CubCave.config.vapidKey,
-        serviceWorkerRegistration: registration
-      });
+      var request = function () {
+        return messaging.getToken({
+          vapidKey: CubCave.config.vapidKey,
+          serviceWorkerRegistration: registration
+        });
+      };
+
+      return clearConflictingSubscription(registration, false)
+        .then(request)
+        .catch(function (err) {
+          // Exactly one retry, after dropping any subscription outright.
+          // If it fails again the error is real and goes to the UI — no loop.
+          console.warn('First token attempt failed, retrying once:', err);
+          return clearConflictingSubscription(registration, true).then(request);
+        });
     }).then(function (token) {
       if (!token) throw new Error('no-token');
       saveToken(token);
@@ -169,14 +259,16 @@ CubCave.push = (function () {
   }
 
   function saveToken(token) {
-    var existing = store.getPushSubscription();
-    if (existing && existing.fcmToken === token) return;
+    var previous = deviceToken();
+    rememberDeviceToken(token);
+
+    // A rotated token leaves the old one dead in the list; drop it so the
+    // scheduled job isn't sending to an address that no longer exists.
+    if (previous && previous !== token) store.removePushSubscription(previous);
+
     // Written into the Drive JSON, which is where Phase 5's scheduled job
     // reads it from.
-    store.setPushSubscription({
-      fcmToken: token,
-      registeredAt: new Date().toISOString()
-    });
+    store.addPushSubscription(token, deviceLabel());
   }
 
   /* ---------- keep the stored token fresh ---------- */
@@ -207,28 +299,96 @@ CubCave.push = (function () {
 
   /* ---------- local test ---------- */
 
-  // Fires a notification straight from the service worker — no server
-  // involved. Confirms permission, the worker, and the display path all work
-  // before Phase 5 exists.
+  /* Fires a notification straight from the service worker — no server
+   * involved. Confirms permission, the worker, and the display path all work.
+   *
+   * The tag is unique per press. Reusing one tag makes the second and later
+   * notifications REPLACE the first silently — no banner, no sound — which
+   * looks exactly like the feature having broken.
+   *
+   * Resolves true when the notification is really on screen, false when the
+   * system accepted it and then showed nothing (Do Not Disturb, Focus assist,
+   * or notifications muted for the browser). Those are very different
+   * problems and the UI should say which one happened. */
   function sendTestNotification() {
+    if (permission() !== 'granted') {
+      return Promise.reject(new Error('permission-' + permission()));
+    }
+
+    var tag = 'cubcave-test-' + Date.now();
+
     return navigator.serviceWorker.ready.then(function (registration) {
       return registration.showNotification('The Cub Cave', {
         body: 'Test notification — this is what a release-day alert looks like.',
         icon: './icons/icon-192.png',
         badge: './icons/icon-192.png',
-        tag: 'cubcave-test'
+        tag: tag,
+        renotify: true,
+        data: { url: './' }
+      }).then(function () {
+        return registration.getNotifications({ tag: tag });
+      }).then(function (shown) {
+        return shown.length > 0;
       });
     });
   }
 
+  /* ---------- diagnostics ---------- */
+
+  /* Tests the browser's own push layer directly, with no Firebase involved.
+   * If this succeeds but Enable fails, the fault is in FCM/config. If this
+   * fails too, the browser or network can't reach its push service at all —
+   * which no amount of app code can fix. Run CubCave.push.diagnose() from the
+   * console. */
+  function diagnose() {
+    var report = {
+      permission: permission(),
+      supported: isSupported(),
+      configured: isConfigured(),
+      standalone: isStandalone(),
+      secureContext: window.isSecureContext,
+      browser: navigator.userAgent,
+      vapidKeyLength: (CubCave.config.vapidKey || '').length
+    };
+
+    if (!('serviceWorker' in navigator)) return Promise.resolve(report);
+
+    return navigator.serviceWorker.ready.then(function (registration) {
+      report.serviceWorkerActive = !!registration.active;
+      report.scope = registration.scope;
+      return registration.pushManager.getSubscription().then(function (sub) {
+        report.existingSubscription = sub ? sub.endpoint.slice(0, 60) + '…' : null;
+
+        // The decisive test: raw browser push subscribe, bypassing Firebase.
+        return registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(CubCave.config.vapidKey)
+        }).then(function (fresh) {
+          report.rawSubscribe = 'OK — the browser push service works';
+          report.endpointHost = new URL(fresh.endpoint).host;
+          return fresh.unsubscribe();
+        }).catch(function (err) {
+          report.rawSubscribe = 'FAILED — ' + err.name + ': ' + err.message;
+        });
+      });
+    }).then(function () { return report; })
+      .catch(function (err) {
+        report.error = String(err);
+        return report;
+      });
+  }
+
   return {
     state: state,
+    diagnose: diagnose,
     permission: permission,
     isSupported: isSupported,
     isConfigured: isConfigured,
     isStandalone: isStandalone,
     isIOS: isIOS,
     savedToken: savedToken,
+    registeredDeviceCount: registeredDeviceCount,
+    deviceLabel: deviceLabel,
     enable: enable,
     refreshIfEnabled: refreshIfEnabled,
     sendTestNotification: sendTestNotification,

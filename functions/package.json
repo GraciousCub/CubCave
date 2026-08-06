@@ -1,0 +1,17 @@
+{
+  "name": "cubcave-release-check",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Daily check for comics releasing today; sends a push via FCM.",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "start": "functions-framework --target=releaseCheck"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.4.0",
+    "firebase-admin": "^12.1.0"
+  }
+}
