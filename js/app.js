@@ -179,6 +179,30 @@ function coverForSeries(entries) {
   return '';
 }
 
+/* Small cover thumbnail for a search result row. Same fallback behaviour as
+ * the grid tiles: initials rather than a broken image. */
+function thumbElement(coverUrl, label) {
+  var thumb = el('div', 'suggest__art');
+
+  if (!coverUrl) {
+    thumb.appendChild(el('div', 'suggest__fallback', initialsOf(label)));
+    return thumb;
+  }
+
+  var img = document.createElement('img');
+  img.alt = '';
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  img.referrerPolicy = 'no-referrer';
+  img.addEventListener('error', function () {
+    img.remove();
+    thumb.appendChild(el('div', 'suggest__fallback', initialsOf(label)));
+  });
+  img.src = coverUrl;
+  thumb.appendChild(img);
+  return thumb;
+}
+
 function artElement(coverUrl, label) {
   var art = el('div', 'tile__art');
 
@@ -810,7 +834,10 @@ function repaintSuggestions() {
     row.type = 'button';
     row.setAttribute('role', 'option');
 
-    row.appendChild(el('span', 'suggest__title', item.title));
+    row.appendChild(thumbElement(item.coverUrl, item.series || item.title));
+
+    var text = el('span', 'suggest__text');
+    text.appendChild(el('span', 'suggest__title', item.title));
 
     var bits = [];
     if (item.storyTitle) bits.push(item.storyTitle);
@@ -822,7 +849,8 @@ function repaintSuggestions() {
     } else {
       bits.push('no release date');
     }
-    row.appendChild(el('span', 'suggest__meta', bits.join(' · ')));
+    text.appendChild(el('span', 'suggest__meta', bits.join(' · ')));
+    row.appendChild(text);
 
     /* click, not pointerdown: pointerdown fires as soon as a finger lands, so
      * scrolling the list selected whichever result the swipe started on. */
@@ -1058,8 +1086,8 @@ function renderFollowing() {
   followList.textContent = '';
 
   followText.textContent = subs.length
-    ? 'New issues are added to Upcoming automatically.'
-    : 'Add a series and its issues are pulled in — including ones not released yet.';
+    ? 'New issues of these are added to Upcoming automatically.'
+    : 'Nothing followed. Open a series and tap Follow to have its new issues added automatically.';
 
   // Only offer the backfill when there's actually something to fix.
   var missing = store.all().filter(function (e) { return !e.coverUrl; }).length;
@@ -1117,9 +1145,13 @@ function repaintSeriesResults() {
     var row = el('button', 'suggest__item');
     row.type = 'button';
     row.setAttribute('role', 'option');
-    row.appendChild(el('span', 'suggest__title', item.seriesName));
-    row.appendChild(el('span', 'suggest__meta',
+    row.appendChild(thumbElement(item.coverUrl, item.seriesName));
+
+    var text = el('span', 'suggest__text');
+    text.appendChild(el('span', 'suggest__title', item.seriesName));
+    text.appendChild(el('span', 'suggest__meta',
       item.issueCount + (item.issueCount === 1 ? ' issue on record' : ' issues on record')));
+    row.appendChild(text);
 
     /* click, not pointerdown: pointerdown fires the moment a finger touches
      * the screen, so scrolling the list picked whichever result you happened

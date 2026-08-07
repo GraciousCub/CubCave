@@ -403,7 +403,14 @@ source pinned there is **no silent fallback**, so results genuinely come from
 where the toggle says. The icons are the sites' own favicons, hotlinked, and
 fall back to a monogram if they don't load.
 
-Results are shown 8 at a time behind a **More** button.
+Results are shown 8 at a time behind a **More** button, each with a cover
+thumbnail.
+
+**Series results only have art from Comic Vine.** Metron's series records carry
+no image at all — not even on the detail endpoint — so its series results show
+initials instead. Fetching issue #1's cover for each would cost one extra
+request per result against a 20/minute limit, which isn't worth it. Issue
+results have covers from both sources.
 
 Entries with no series are grouped under **Other**.
 

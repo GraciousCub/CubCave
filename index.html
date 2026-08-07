@@ -85,6 +85,7 @@
         <div class="follow-card__body">
           <div class="push-card__title">Following</div>
           <div class="push-card__text" id="follow-text"></div>
+        <!-- Populated by renderFollowing(). -->
         </div>
         <button class="btn" type="button" id="follow-add-btn">+ Series</button>
       </div>
@@ -200,11 +201,12 @@
 <!-- Follow-a-series sheet. -->
 <dialog class="sheet" id="series-dialog" aria-labelledby="series-dialog-title">
   <div class="sheet__form">
-    <h2 class="sheet__title" id="series-dialog-title">Follow a series</h2>
+    <h2 class="sheet__title" id="series-dialog-title">Add a series</h2>
     <p class="field__hint">
-      Adds every issue of the series and keeps following it. Issues that
-      haven&rsquo;t come out yet are marked Upcoming automatically; the rest go
-      to your queue to mark as you read them.
+      Adds every issue of the series. Ones that haven&rsquo;t come out yet are
+      marked Upcoming automatically; the rest go to your queue to mark as you
+      read them. Use <strong>Follow</strong> inside the series afterwards if you
+      want new issues added as they&rsquo;re announced.
     </p>
 
     <label class="field">

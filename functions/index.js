@@ -525,7 +525,9 @@ async function searchMetronSeries(query) {
     seriesName: s.series || s.name || 'Unknown series',
     yearBegan: s.year_began || null,
     yearEnd: s.year_end || null,
-    issueCount: s.issue_count || 0
+    issueCount: s.issue_count || 0,
+    // Metron has no series artwork — see the note in searchComicVineSeries.
+    coverUrl: ''
   }));
 }
 
@@ -540,7 +542,7 @@ async function searchComicVineSeries(query) {
     resources: 'volume',
     limit: '50',
     query,
-    field_list: 'id,name,start_year,count_of_issues'
+    field_list: 'id,name,start_year,count_of_issues,image'
   });
 
   const body = await fetchJson(
@@ -556,7 +558,11 @@ async function searchComicVineSeries(query) {
       : String(volume.name || 'Unknown series'),
     yearBegan: volume.start_year || null,
     yearEnd: null,
-    issueCount: volume.count_of_issues || 0
+    issueCount: volume.count_of_issues || 0,
+    /* Metron's series records carry no image at all, so only Comic Vine can
+     * illustrate a series result. Metron's fall back to initials rather than
+     * costing one extra request per result against a 20/minute limit. */
+    coverUrl: (volume.image && (volume.image.thumb_url || volume.image.icon_url)) || ''
   }));
 }
 
