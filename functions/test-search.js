@@ -38,6 +38,7 @@ let tokenAud = 'web-client-id.apps.googleusercontent.com';
 let tokenValid = true;
 let comicVineStatus = 200;
 let comicVineBody = null;
+let retryAfterHeader = {};
 let comicVineHeadersSeen = null;
 let hang = false;
 
@@ -51,8 +52,9 @@ const issue = (over = {}) => ({
 
 global.fetch = async (url, options = {}) => {
   url = String(url);
-  const json = (obj, status = 200) => ({
+  const json = (obj, status = 200, headers = {}) => ({
     ok: status >= 200 && status < 300, status,
+    headers: { get: (name) => headers[name.toLowerCase()] || null },
     json: async () => obj, text: async () => JSON.stringify(obj)
   });
 
@@ -72,7 +74,7 @@ global.fetch = async (url, options = {}) => {
           reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })));
       });
     }
-    if (comicVineStatus !== 200) return json({ error: 'rate limited' }, comicVineStatus);
+    if (comicVineStatus !== 200) return json({ error: 'rate limited' }, comicVineStatus, retryAfterHeader);
     return json(comicVineBody || { error: 'OK', results: [issue()] });
   }
 
@@ -165,6 +167,14 @@ const AUTH = { authorization: 'Bearer good-token' };
   r = await call({ q: 'rate limited now' }, AUTH);
   R.upstreamError = { status: r.status, error: r.body.error };
   comicVineStatus = 200;
+
+  // 10b. A Retry-After from the upstream is passed through, not guessed at
+  comicVineStatus = 429;
+  retryAfterHeader = { 'retry-after': '42' };
+  r = await call({ q: 'retry after test' }, AUTH);
+  R.retryAfter = { status: r.status, error: r.body.error };
+  comicVineStatus = 200;
+  retryAfterHeader = {};
 
   // 11. Timeout aborts rather than hanging
   hang = true;

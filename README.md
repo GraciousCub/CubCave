@@ -293,18 +293,44 @@ project, which is Google policy rather than a charge.
 
 ## Comic search and autofill (Phase 6)
 
-Typing a title in the add/edit sheet searches [Comic Vine](https://comicvine.gamespot.com/api/)
-and offers matches. Picking one fills in the title, series and release date, and
-moves the entry to **Upcoming** if the comic hasn't come out yet.
+Typing a title in the add/edit sheet searches a comic database and offers
+matches. Picking one fills in the title, series and release date, and moves the
+entry to **Upcoming** if the comic hasn't come out yet.
 
-Comic Vine sends no CORS headers and needs an API key, so the browser can't call
-it. `comicSearch` in `functions/index.js` proxies it, keeping the key server-side.
+### Two sources, and why
 
-**Quota discipline.** Comic Vine allows 400 requests per 15 minutes, and typing
-"Absolute Batman" is 15 keystrokes. So: nothing fires under 3 characters,
-keystrokes are debounced 350ms, superseded requests are aborted, repeat queries
-come from a local cache without leaving the browser, the function caches for 10
-minutes on top of that, and failures are shown rather than retried.
+**[Metron](https://metron.cloud/) is primary.** It ingests publisher
+solicitation catalogues about three months ahead, so it knows about issues that
+haven't been released — which is the entire point of a release tracker. It also
+carries `year_began`, so *"Absolute Batman (2024)"* is distinguishable from
+every other Batman series.
+
+**[Comic Vine](https://comicvine.gamespot.com/api/) is the fallback**, consulted
+only when Metron returns fewer than 5 matches, for back catalogue that Metron's
+community coverage misses. A typical search costs one upstream request.
+
+Comic Vine has **no forthcoming issues at all** — measured, not assumed: across
+100 results for "absolute batman" the newest was #22 dated 2026-07-08, already
+in the past, while Metron had #23 on 2026-08-12. That is why the sources are
+ordered this way.
+
+Neither can be called from the browser — Comic Vine sends no CORS headers, and
+both need credentials — so `comicSearch` in `functions/index.js` proxies them.
+
+**Metron result ordering:** Metron returns matches oldest-first and supports no
+`ordering` parameter, so a bare "detective comics" (1,147 issues) would hand
+back 1937. Queries without an issue number are therefore restricted to roughly
+the last year, with no upper bound so solicited future issues are included.
+Queries *with* an issue number skip that window, since a specific issue may well
+be old.
+
+**Quota discipline.** Metron allows 20 requests/minute and 5,000/day; Comic Vine
+400 per 15 minutes. Typing "Absolute Batman" is 15 keystrokes. So: nothing fires
+under 3 characters, keystrokes are debounced 350ms, superseded requests are
+aborted, repeat queries come from a local cache without leaving the browser, the
+function caches for 10 minutes on top of that, and failures are shown rather
+than retried. A `Retry-After` from either upstream is passed through to the
+message you see rather than guessed at.
 
 **Access control.** The endpoint is reachable without Cloud Run authentication —
 the browser can't mint an OIDC token — so the function checks it itself: the
@@ -318,18 +344,16 @@ Search needs you signed in. If you aren't, the sheet says so and sends nothing.
 only has `cover_date` — the printed month, often weeks later — the suggestion is
 labelled *(cover date)* so you know it's approximate.
 
-**Search tip: type the full series name.** Comic Vine's search has no date
-relevance, so the function requests 30 matches and reranks them — exact issue
-number first, then dated before undated, then newest first. That works well for
-a specific series:
+**Ranking is by similarity to what you typed**, not by date. Series-name token
+coverage, exact-series and prefix bonuses, a penalty for extra words in the
+series title, and a strong boost for an exact issue-number match. Date only
+breaks ties between equally good matches, newest first. Up to 20 results.
 
-- `absolute batman 22` → *Absolute Batman #22*, 2026-07-08, exact store date
-- `detective comics 1104` → exact match, 2025-12-24
+Verified against the live APIs:
 
-A bare `batman 14` is inherently ambiguous — dozens of series are named "Batman
-something" — and returns *Urban Legends*, *Batman/Superman* and the like. That
-is a limit of the source data, not the app. Include the series name and it is
-consistently accurate.
+- `absolute batman` → #23, 2026-08-12, **upcoming**, top of the list
+- `detective comics` → #1112, 2026-08-26, **upcoming**
+- `batman bad seeds` → *Bad Seeds – Sunset #1*, 2026-08-26, **upcoming**
 
 Test the proxy with no key, no network and no quota used:
 
@@ -339,15 +363,19 @@ node functions/test-search.js
 
 ### Setup
 
-**1. Get a Comic Vine API key** — create a free account at
+**1. Metron token** — free account at [metron.cloud](https://metron.cloud/),
+then the **API Tokens** page in your profile → **Generate Token**. It's sent as
+`Authorization: Bearer <token>` and doesn't expire; revoke it there if it leaks.
+
+**2. Comic Vine API key** (optional, for back catalogue) — free account at
 [comicvine.gamespot.com](https://comicvine.gamespot.com/), then open
 [comicvine.gamespot.com/api/](https://comicvine.gamespot.com/api/) while signed
-in. Your key is shown on that page.
+in. Your key is on that page.
 
-**2. Create `functions/.env.search.yaml`** from `.env.search.yaml.example` and
-paste the key in. It's gitignored, and kept separate from `.env.yaml` so the
-search function never holds the Drive refresh token, and the daily job never
-holds the Comic Vine key.
+**3. Create `functions/.env.search.yaml`** from `.env.search.yaml.example` and
+paste both in. It's gitignored, and kept separate from `.env.yaml` so the search
+function never holds the Drive refresh token, and the daily job never holds the
+comic database credentials.
 
 **3. Deploy:**
 

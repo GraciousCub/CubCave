@@ -143,6 +143,7 @@ function buildMessage(dueEntries) {
  * ================================================================== */
 
 const COMICVINE_KEY = process.env.COMICVINE_API_KEY;
+const METRON_TOKEN = process.env.METRON_TOKEN;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ||
   'https://graciouscub.github.io,http://localhost:5173').split(',');
 const EXPECTED_AUDIENCE = process.env.GOOGLE_WEB_CLIENT_ID || '';
@@ -271,10 +272,11 @@ function normaliseDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
 }
 
-function mapIssue(issue) {
+function mapComicVineIssue(issue) {
   const seriesName = (issue.volume && issue.volume.name) || '';
   const number = issue.issue_number ? `#${issue.issue_number}` : '';
   return {
+    source: 'comicvine',
     sourceId: issue.id,
     // store_date is the day it reaches shops; cover_date is the printed month
     // and is often weeks later. Prefer the real one.
@@ -286,6 +288,155 @@ function mapIssue(issue) {
     storyTitle: issue.name || '',
     coverUrl: (issue.image && (issue.image.thumb_url || issue.image.icon_url)) || ''
   };
+}
+
+/* Metron carries the year the series began, so "Absolute Batman (2024)" is
+ * distinguishable from every other Batman book — the ambiguity that makes
+ * Comic Vine results hard to choose between. */
+function mapMetronIssue(issue) {
+  const series = issue.series || {};
+  const seriesName = series.name || '';
+  const seriesLabel = series.year_began
+    ? `${seriesName} (${series.year_began})`
+    : seriesName;
+  const number = issue.number ? `#${issue.number}` : '';
+  return {
+    source: 'metron',
+    sourceId: issue.id,
+    releaseDate: normaliseDate(issue.store_date) || normaliseDate(issue.cover_date),
+    dateIsApproximate: !normaliseDate(issue.store_date),
+    title: [seriesName, number].filter(Boolean).join(' ') || (issue.issue || 'Untitled'),
+    series: seriesLabel,
+    issueNumber: issue.number || '',
+    storyTitle: '',
+    coverUrl: issue.image || ''
+  };
+}
+
+/* Shared fetch: bounded wait, single attempt. Retrying an upstream that rate
+ * limits this tightly would make things worse, not better. */
+async function fetchJson(url, headers, sourceLabel) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), SEARCH_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(url, { signal: abort.signal, headers });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw Object.assign(
+        new Error(`${sourceLabel} took too long to answer`), { status: 504 }
+      );
+    }
+    throw Object.assign(new Error(`Could not reach ${sourceLabel}`), { status: 502 });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (response.status === 429 || response.status === 420) {
+    // Metron sends Retry-After; pass it on rather than guessing.
+    const retryAfter = response.headers ? response.headers.get('retry-after') : null;
+    throw Object.assign(
+      new Error(`${sourceLabel} is rate limiting us — try again${
+        retryAfter ? ` in ${retryAfter}s` : ' shortly'}`),
+      { status: 429, retryAfter }
+    );
+  }
+  if (!response.ok) {
+    throw Object.assign(
+      new Error(`${sourceLabel} returned ${response.status}`), { status: 502 }
+    );
+  }
+  return response.json();
+}
+
+const USER_AGENT = 'CubCave-ComicTracker/1.0 (personal comic reading tracker)';
+
+/* Metron is the primary source: it ingests publisher solicitations about three
+ * months ahead, so it knows about issues that haven't come out yet. Comic Vine
+ * does not, which is the whole reason for tracking releases. */
+async function searchMetron(parsed) {
+  if (!METRON_TOKEN) return [];
+
+  const params = new URLSearchParams();
+  const seriesName = parsed.tokens.join(' ');
+  if (seriesName) params.set('series_name', seriesName);
+  if (!seriesName && !parsed.number) return [];
+
+  if (parsed.number) {
+    // A specific issue was asked for, so don't constrain by date — it may
+    // well be an old one.
+    params.set('number', parsed.number);
+  } else {
+    /* Metron returns matches oldest-first and supports no ordering parameter,
+     * so a bare "detective comics" (1,147 issues) hands back 1937. Restricting
+     * to roughly the last year — with no upper bound, so solicited future
+     * issues are included — is both what a release tracker wants and small
+     * enough to come back in a single page. Back catalogue is Comic Vine's
+     * job, via the fallback below. */
+    const since = new Date();
+    since.setFullYear(since.getFullYear() - 1);
+    params.set('store_date_range_after', since.toISOString().slice(0, 10));
+  }
+
+  const body = await fetchJson(
+    `https://metron.cloud/api/issue/?${params}`,
+    {
+      Authorization: `Bearer ${METRON_TOKEN}`,
+      Accept: 'application/json',
+      'User-Agent': USER_AGENT
+    },
+    'Metron'
+  );
+
+  return (body.results || []).map(mapMetronIssue);
+}
+
+/* Comic Vine fills in back catalogue that Metron's community coverage misses.
+ * Only consulted when Metron came back thin, to stay well inside both quotas. */
+async function searchComicVine(query) {
+  if (!COMICVINE_KEY) return [];
+
+  const url = 'https://comicvine.gamespot.com/api/search/?' + new URLSearchParams({
+    api_key: COMICVINE_KEY,
+    format: 'json',
+    resources: 'issue',
+    limit: String(UPSTREAM_LIMIT),
+    query,
+    field_list: 'id,name,issue_number,store_date,cover_date,volume,image'
+  });
+
+  const body = await fetchJson(
+    url,
+    // Comic Vine rejects requests with no/default User-Agent.
+    { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    'Comic Vine'
+  );
+
+  if (body.error && body.error !== 'OK') {
+    const throttled = /rate limit/i.test(body.error) || body.status_code === 107;
+    throw Object.assign(
+      new Error(throttled
+        ? 'Comic Vine is rate limiting us — try again shortly'
+        : `Comic Vine: ${body.error}`),
+      { status: throttled ? 429 : 502 }
+    );
+  }
+
+  return (body.results || []).map(mapComicVineIssue);
+}
+
+/* Same issue from both sources: keep Metron's, which has the better date. */
+function dedupe(items) {
+  const seen = new Map();
+  items.forEach((item) => {
+    const key = `${normaliseText(item.series).replace(/\s*\(\d{4}\)\s*$/, '')}|${item.issueNumber}|${item.releaseDate || ''}`;
+    const existing = seen.get(key);
+    if (!existing || (existing.source !== 'metron' && item.source === 'metron')) {
+      seen.set(key, item);
+    }
+  });
+  return Array.from(seen.values());
 }
 
 functions.http('comicSearch', async (req, res) => {
@@ -302,7 +453,7 @@ functions.http('comicSearch', async (req, res) => {
   const query = String(req.query.q || '').trim();
 
   try {
-    if (!COMICVINE_KEY) {
+    if (!METRON_TOKEN && !COMICVINE_KEY) {
       throw Object.assign(new Error('Search is not configured'), { status: 503 });
     }
     if (query.length < 3) {
@@ -318,68 +469,35 @@ functions.http('comicSearch', async (req, res) => {
       return res.status(200).json({ results: cached });
     }
 
-    const url = 'https://comicvine.gamespot.com/api/search/?' + new URLSearchParams({
-      api_key: COMICVINE_KEY,
-      format: 'json',
-      resources: 'issue',
-      limit: String(UPSTREAM_LIMIT),
-      query,
-      field_list: 'id,name,issue_number,store_date,cover_date,volume,image'
-    });
-
-    // Bounded wait, and no retry: a failure surfaces rather than doubling load
-    // on an upstream that rate-limits hard.
-    const abort = AbortController ? new AbortController() : null;
-    const timer = abort ? setTimeout(() => abort.abort(), SEARCH_TIMEOUT_MS) : null;
-
-    let upstream;
-    try {
-      upstream = await fetch(url, {
-        signal: abort ? abort.signal : undefined,
-        headers: {
-          // Comic Vine rejects requests with no/!default User-Agent.
-          'User-Agent': 'CubCave-ComicTracker/1.0 (personal comic reading tracker)',
-          Accept: 'application/json'
-        }
-      });
-    } catch (err) {
-      if (err.name === 'AbortError') {
-        throw Object.assign(
-          new Error('The comic database took too long to answer'), { status: 504 }
-        );
-      }
-      throw Object.assign(new Error('Could not reach the comic database'), { status: 502 });
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-
-    if (!upstream.ok) {
-      // Comic Vine signals throttling with 420 as well as the standard 429.
-      const throttled = upstream.status === 429 || upstream.status === 420;
-      throw Object.assign(
-        new Error(throttled
-          ? 'The comic database is rate limiting us — try again shortly'
-          : `Comic database returned ${upstream.status}`),
-        { status: throttled ? 429 : 502 }
-      );
-    }
-
-    const body = await upstream.json();
-    if (body.error && body.error !== 'OK') {
-      // It also reports throttling in the body with HTTP 200 (status_code 107).
-      const throttled = /rate limit/i.test(body.error) || body.status_code === 107;
-      throw Object.assign(
-        new Error(throttled
-          ? 'The comic database is rate limiting us — try again shortly'
-          : `Comic database: ${body.error}`),
-        { status: throttled ? 429 : 502 }
-      );
-    }
-
     const parsed = parseQuery(query);
 
-    const results = (body.results || [])
-      .map(mapIssue)
+    /* Metron first — it's the only one of the two that knows about issues yet
+     * to be released. Comic Vine is consulted only when Metron comes back
+     * thin, so a typical search costs one upstream request, not two. */
+    let found = [];
+    let metronFailure = null;
+
+    try {
+      found = await searchMetron(parsed);
+    } catch (err) {
+      // A Metron outage shouldn't take search down if Comic Vine can answer.
+      metronFailure = err;
+      console.warn('Metron search failed:', err.message);
+    }
+
+    if (found.length < 5 && COMICVINE_KEY) {
+      try {
+        found = found.concat(await searchComicVine(query));
+      } catch (err) {
+        // Both down, or Metron already failed and this was the last hope.
+        if (!found.length) throw metronFailure || err;
+        console.warn('Comic Vine search failed:', err.message);
+      }
+    }
+
+    if (!found.length && metronFailure) throw metronFailure;
+
+    const results = dedupe(found)
       // An entry with no date at all can't drive a release notification, but
       // it's still a valid thing to track, so keep it and let the UI say so.
       .filter((r) => r.title)
