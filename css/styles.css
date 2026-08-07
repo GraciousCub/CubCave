@@ -477,6 +477,15 @@ button.tile:active,
   background: var(--bg);
 }
 
+.follow-card__backfill {
+  width: 100%;
+  margin-top: 10px;
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.follow-card__backfill[hidden] { display: none; }
+
 .follow-item__name {
   flex: 1;
   min-width: 0;

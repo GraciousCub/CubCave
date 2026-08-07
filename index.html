@@ -26,7 +26,7 @@
     <h1>The Cub Cave</h1>
     <p class="app-bar__sub" id="shell-status">Comic reading tracker</p>
   </div>
-  <button class="btn btn--primary" id="add-entry-btn" type="button">+ Add</button>
+  <button class="btn btn--primary" id="add-series-btn" type="button">+ Series</button>
 </header>
 
 <nav class="tabs" id="tabs" role="tablist" aria-label="Reading lists">
@@ -86,9 +86,12 @@
           <div class="push-card__title">Following</div>
           <div class="push-card__text" id="follow-text"></div>
         </div>
-        <button class="btn" type="button" id="follow-add-btn">+ Follow</button>
+        <button class="btn" type="button" id="follow-add-btn">+ Series</button>
       </div>
       <ul class="follow-list" id="follow-list"></ul>
+      <button class="btn follow-card__backfill" type="button" id="backfill-btn" hidden>
+        Find missing covers
+      </button>
     </div>
 
     <div class="series-grid" data-grid="upcoming"></div>
@@ -194,8 +197,9 @@
   <div class="sheet__form">
     <h2 class="sheet__title" id="series-dialog-title">Follow a series</h2>
     <p class="field__hint">
-      New issues of a followed series are added to Upcoming automatically, even
-      if the database doesn&rsquo;t know about them yet.
+      Adds every issue of the series and keeps following it. Issues that
+      haven&rsquo;t come out yet are marked Upcoming automatically; the rest go
+      to your queue to mark as you read them.
     </p>
 
     <label class="field">
@@ -208,6 +212,8 @@
     <p class="field__hint" id="series-status" hidden></p>
 
     <div class="sheet__actions">
+      <!-- Not everything is in the database; keep a way in by hand. -->
+      <button class="btn" type="button" id="single-issue-btn">Add one issue</button>
       <span class="sheet__spacer"></span>
       <button class="btn" type="button" id="series-close-btn">Close</button>
     </div>

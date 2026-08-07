@@ -690,9 +690,6 @@ document.getElementById('cancel-btn').addEventListener('click', function () {
   dialog.close();
 });
 
-document.getElementById('add-entry-btn').addEventListener('click', function () {
-  openForm(null);
-});
 
 /* ---------- tabs ---------- */
 
@@ -733,6 +730,7 @@ var seriesDialog = document.getElementById('series-dialog');
 var seriesInput = document.getElementById('f-series-search');
 var seriesSuggest = document.getElementById('series-suggest');
 var seriesStatus = document.getElementById('series-status');
+var backfillBtn = document.getElementById('backfill-btn');
 
 function renderFollowing() {
   var subs = store.getSubscriptions();
@@ -740,7 +738,15 @@ function renderFollowing() {
 
   followText.textContent = subs.length
     ? 'New issues are added to Upcoming automatically.'
-    : 'Follow a series and its new issues appear here by themselves — useful when an issue isn\'t in the database yet.';
+    : 'Add a series and its issues are pulled in — including ones not released yet.';
+
+  // Only offer the backfill when there's actually something to fix.
+  var missing = store.all().filter(function (e) { return !e.coverUrl; }).length;
+  backfillBtn.hidden = !missing;
+  if (missing && !backfillBtn.disabled) {
+    backfillBtn.textContent = 'Find covers for ' + missing +
+      (missing === 1 ? ' issue' : ' issues');
+  }
 
   subs.forEach(function (sub) {
     var li = el('li', 'follow-item');
@@ -796,50 +802,155 @@ function renderSeriesResults(results) {
   setSeriesStatus('');
 }
 
+/* Adding a series brings in its whole run and follows it, so future issues
+ * keep arriving. Issues not yet released are marked Upcoming automatically;
+ * everything else lands in the queue for you to mark as you go. */
 function followSeries(item) {
-  var sub = store.addSubscription({
-    source: item.source,
-    seriesId: item.seriesId,
-    seriesName: item.seriesName
-  });
-  if (!sub) return;
+  var alreadyFollowed = store.isSubscribed(item.seriesId);
+  if (!alreadyFollowed) {
+    store.addSubscription({
+      source: item.source,
+      seriesId: item.seriesId,
+      seriesName: item.seriesName
+    });
+  }
 
   seriesSuggest.hidden = true;
-  setSeriesStatus('Following ' + item.seriesName + ' — checking for issues…');
+  setSeriesStatus('Adding ' + item.seriesName + ' — fetching issues…');
 
-  // Immediate feedback rather than waiting for the overnight run.
-  CubCave.search.upcomingForSeries(item.seriesId).then(function (issues) {
-    var added = 0;
+  CubCave.search.allIssuesForSeries(item.seriesId).then(function (issues) {
+    var today = todayISO();
+    var batch = [];
+    var skipped = 0;
+
     issues.forEach(function (issue) {
       var sourceId = 'metron:' + issue.sourceId;
-      if (!issue.releaseDate || store.hasSourceId(sourceId)) return;
-      store.add({
+      if (store.hasSourceId(sourceId)) { skipped += 1; return; }
+
+      batch.push({
         title: issue.title,
         series: issue.series,
-        status: 'upcoming',
+        // Not out yet decides itself; the rest is for you to mark.
+        status: (issue.releaseDate && issue.releaseDate > today) ? 'upcoming' : 'next',
         releaseDate: issue.releaseDate,
-        notes: 'Added automatically from ' + item.seriesName + '.',
+        notes: '',
         sourceId: sourceId,
         coverUrl: issue.coverUrl || '',
         issueNumber: issue.issueNumber || ''
       });
-      added += 1;
     });
 
-    setSeriesStatus(added
-      ? 'Following ' + item.seriesName + ' — added ' + added +
-        (added === 1 ? ' issue.' : ' issues.')
-      : 'Following ' + item.seriesName + '. Nothing solicited yet; it\'ll be ' +
-        'added as soon as it appears.');
+    var added = store.addMany(batch);
+    var upcoming = batch.filter(function (b) { return b.status === 'upcoming'; }).length;
+
+    var message;
+    if (added) {
+      message = 'Added ' + added + (added === 1 ? ' issue' : ' issues');
+      if (upcoming) message += ', ' + upcoming + ' not out yet';
+      message += '.';
+    } else if (skipped) {
+      message = 'Already up to date — all ' + skipped + ' issues are tracked.';
+    } else {
+      message = 'Nothing on record yet. New issues will be added as they appear.';
+    }
+    setSeriesStatus(message);
+    toast(message);
   }).catch(function (err) {
-    // The subscription itself is saved regardless — the daily job will pick
-    // it up even if this immediate check failed.
-    setSeriesStatus('Following ' + item.seriesName + '. (Could not check now: ' +
-                    err.message + ')');
+    // The follow itself is saved regardless — the daily job picks it up even
+    // if this import failed.
+    setSeriesStatus('Following ' + item.seriesName +
+                    ', but could not fetch issues now: ' + err.message);
   });
 }
 
-document.getElementById('follow-add-btn').addEventListener('click', function () {
+/* ---------- cover backfill ---------- */
+
+/* Entries added before covers were stored have no art. Rather than a lookup
+ * per issue, this resolves one series at a time — a series search to find its
+ * id, then its issues in one request — and matches on issue number. */
+function backfillCovers() {
+  var missing = store.all().filter(function (e) { return !e.coverUrl; });
+  if (!missing.length) {
+    toast('Every issue already has a cover.');
+    return Promise.resolve(0);
+  }
+
+  var bySeries = {};
+  missing.forEach(function (entry) {
+    var key = seriesKeyOf(entry);
+    if (key === 'Other') return;      // nothing to look the series up by
+    (bySeries[key] = bySeries[key] || []).push(entry);
+  });
+
+  var names = Object.keys(bySeries);
+  if (!names.length) {
+    toast('Those issues have no series to look up.');
+    return Promise.resolve(0);
+  }
+
+  backfillBtn.disabled = true;
+  var patched = 0;
+  var index = 0;
+
+  function nextSeries() {
+    if (index >= names.length) {
+      backfillBtn.disabled = false;
+      toast(patched
+        ? 'Found covers for ' + patched + (patched === 1 ? ' issue.' : ' issues.')
+        : 'No matching covers found.');
+      renderFollowing();
+      return patched;
+    }
+
+    var name = names[index++];
+    backfillBtn.textContent = 'Finding covers… (' + index + '/' + names.length + ')';
+
+    // Strip the "(2024)" the app appends, since that's our label not Metron's.
+    var searchName = name.replace(/\s*\(\d{4}\)\s*$/, '');
+
+    return CubCave.search.seriesByName(searchName).then(function (candidates) {
+      var match = candidates.filter(function (c) { return c.seriesName === name; })[0]
+               || candidates.filter(function (c) {
+                    return c.seriesName.replace(/\s*\(\d{4}\)\s*$/, '') === searchName;
+                  })[0];
+      if (!match) return;
+
+      return CubCave.search.allIssuesForSeries(match.seriesId).then(function (issues) {
+        var byNumber = {};
+        issues.forEach(function (i) {
+          if (i.issueNumber) byNumber[String(i.issueNumber)] = i;
+        });
+
+        var patches = [];
+        bySeries[name].forEach(function (entry) {
+          var number = entry.issueNumber ||
+            (String(entry.title).match(/#\s*([0-9]+(?:\.[0-9]+)?)/) || [])[1];
+          var found = number && byNumber[String(number)];
+          if (!found || !found.coverUrl) return;
+          patches.push({
+            id: entry.id,
+            coverUrl: found.coverUrl,
+            issueNumber: found.issueNumber,
+            sourceId: 'metron:' + found.sourceId
+          });
+        });
+        patched += store.applyPatches(patches);
+      });
+    }).catch(function (err) {
+      console.warn('Cover lookup failed for "' + name + '":', err.message);
+    }).then(function () {
+      // Paced: Metron allows 20 requests a minute and each series costs two.
+      return new Promise(function (resolve) { setTimeout(resolve, 400); })
+        .then(nextSeries);
+    });
+  }
+
+  return nextSeries();
+}
+
+backfillBtn.addEventListener('click', function () { backfillCovers(); });
+
+function openSeriesPicker() {
   seriesInput.value = '';
   seriesSuggest.hidden = true;
   seriesSuggest.textContent = '';
@@ -847,6 +958,16 @@ document.getElementById('follow-add-btn').addEventListener('click', function () 
     ? 'Sign in to search for series.' : '');
   seriesDialog.showModal();
   if (!window.matchMedia('(pointer: coarse)').matches) seriesInput.focus();
+}
+
+document.getElementById('add-series-btn').addEventListener('click', openSeriesPicker);
+document.getElementById('follow-add-btn').addEventListener('click', openSeriesPicker);
+
+// Escape hatch for anything the database doesn't have.
+document.getElementById('single-issue-btn').addEventListener('click', function () {
+  CubCave.search.cancel();
+  seriesDialog.close();
+  openForm(null);
 });
 
 document.getElementById('series-close-btn').addEventListener('click', function () {

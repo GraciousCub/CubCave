@@ -391,6 +391,32 @@ loudly on anything else. If the artwork has its own opaque background, that
 colour is extended for the maskable and iOS icons — otherwise the inset shows a
 visible square where one dark meets another.
 
+## Adding comics
+
+**You add a series, not individual issues.** `+ Series` searches the database,
+and picking one:
+
+- imports **every issue of that run**, with cover art
+- marks issues **not yet released** as Upcoming automatically
+- puts the rest in your queue to mark as you read them
+- **follows** the series, so future issues keep arriving on their own
+
+Adding the same series again is safe: issues already tracked are skipped and it
+reports how many were.
+
+`Add one issue` inside that sheet is the escape hatch for anything the database
+doesn't have — the old per-issue form, unchanged.
+
+Long runs are capped at 500 issues per import.
+
+### Missing covers
+
+Entries added before covers were stored show initials instead. **Find missing
+covers** on the Upcoming tab fixes them: it resolves one series at a time (a
+series lookup, then its issues in one request) and matches on issue number,
+filling in cover art, issue number and source id. Issues with no series can't
+be looked up and are left alone.
+
 ## Following a series
 
 The **Upcoming** tab has a *Following* card. Follow a series and its new issues

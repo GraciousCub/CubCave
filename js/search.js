@@ -180,10 +180,19 @@ CubCave.search = (function () {
    * moment you follow something, so you see straight away what it brought in
    * rather than waiting for tomorrow's scheduled check. */
   function upcomingForSeries(seriesId) {
+    return issuesForSeries(seriesId, false);
+  }
+
+  // The whole run, for importing a series.
+  function allIssuesForSeries(seriesId) {
+    return issuesForSeries(seriesId, true);
+  }
+
+  function issuesForSeries(seriesId, all) {
     var token = CubCave.drive.currentAccessToken();
     if (!token) return Promise.reject(new Error('Sign in first.'));
 
-    return fetch(endpointUrl({ seriesId: seriesId }), {
+    return fetch(endpointUrl({ seriesId: seriesId, all: all ? '1' : '' }), {
       headers: { Authorization: 'Bearer ' + token }
     }).then(function (response) {
       return response.json().catch(function () { return {}; })
@@ -200,6 +209,19 @@ CubCave.search = (function () {
     readiness: readiness,
     onInput: onInput,
     upcomingForSeries: upcomingForSeries,
+    allIssuesForSeries: allIssuesForSeries,
+    seriesByName: function (name) {
+      var token = CubCave.drive.currentAccessToken();
+      if (!token) return Promise.reject(new Error('Sign in first.'));
+      return fetch(endpointUrl({ q: name, type: 'series' }), {
+        headers: { Authorization: 'Bearer ' + token }
+      }).then(function (r) {
+        return r.json().then(function (b) {
+          if (!r.ok) throw new Error(b.error || 'Series lookup failed.');
+          return b.results || [];
+        });
+      });
+    },
     cancel: cancel,
     bindCurrentText: bindCurrentText
   };

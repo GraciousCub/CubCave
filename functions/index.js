@@ -468,7 +468,7 @@ async function searchMetron(parsed) {
   return (body.results || []).map(mapMetronIssue);
 }
 
-/* Comic Vine fills in back catalogue that Metron's community coverage misses.
+/* Comic Vine fills in the back catalogue that Metron's community coverage misses.
  * Only consulted when Metron came back thin, to stay well inside both quotas. */
 async function searchComicVine(query) {
   if (!COMICVINE_KEY) return [];
@@ -528,7 +528,10 @@ async function searchMetronSeries(query) {
 }
 
 /* Issues in one series. `fromDate` limits it to things not yet released, which
- * is all a followed series needs to contribute. */
+ * is all a followed series needs to contribute; omit it to get the whole run,
+ * which is what importing a series needs. */
+const MAX_SERIES_ISSUES = 500;
+
 async function metronSeriesIssues(seriesId, fromDate) {
   if (!METRON_TOKEN) return [];
 
@@ -545,7 +548,8 @@ async function metronSeriesIssues(seriesId, fromDate) {
     'Metron'
   );
 
-  return (body.results || []).map(mapMetronIssue);
+  // Long-running titles can carry a thousand issues; cap the payload.
+  return (body.results || []).slice(0, MAX_SERIES_ISSUES).map(mapMetronIssue);
 }
 
 /* Same issue from both sources: keep Metron's, which has the better date. */
@@ -582,6 +586,9 @@ functions.http('comicSearch', async (req, res) => {
 
     const mode = String(req.query.type || 'issue');
     const seriesId = String(req.query.seriesId || '').trim();
+    // Part of the cache key: "the whole run" and "only what's unreleased" are
+    // different answers to the same series id.
+    const wantAll = req.query.all === '1' || req.query.all === 'true';
 
     // A seriesId lookup carries no text, so the minimum-length rule only
     // applies to the text-driven modes.
@@ -589,7 +596,7 @@ functions.http('comicSearch', async (req, res) => {
       return res.status(200).json({ results: [], reason: 'query too short' });
     }
 
-    const key = `${mode}|${seriesId}|${query.toLowerCase()}`;
+    const key = `${mode}|${seriesId}|${wantAll ? 'all' : 'future'}|${query.toLowerCase()}`;
     const cached = cacheGet(searchCache, key, SEARCH_TTL_MS);
     if (cached) {
       res.set('X-Cache', 'hit');
@@ -606,8 +613,11 @@ functions.http('comicSearch', async (req, res) => {
     }
 
     if (seriesId) {
-      const today = todayInZone(TIMEZONE);
-      const issues = await metronSeriesIssues(seriesId, today);
+      // all=1 returns the whole run (importing a series); otherwise just what
+      // hasn't been released yet (the daily follow check).
+      const issues = await metronSeriesIssues(
+        seriesId, wantAll ? null : todayInZone(TIMEZONE)
+      );
       cacheSet(searchCache, key, issues);
       res.set('X-Cache', 'miss');
       return res.status(200).json({ results: issues });

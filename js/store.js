@@ -300,6 +300,59 @@ CubCave.store = (function () {
     return entry;
   }
 
+  /* Importing a series can mean a hundred issues at once. Adding them one at
+   * a time would fire a re-render and a Drive sync per issue; this does the
+   * lot in a single change. Returns how many were actually added. */
+  function addMany(list) {
+    var added = 0;
+    var order = nextMaxSortOrder();
+
+    (list || []).forEach(function (fields) {
+      var title = String(fields.title || '').trim();
+      if (!title) return;
+
+      order += 1;
+      var entry = {
+        id: uid(),
+        title: title,
+        series: String(fields.series || '').trim(),
+        status: STATUSES.indexOf(fields.status) !== -1 ? fields.status : 'next',
+        releaseDate: isDateString(fields.releaseDate) ? fields.releaseDate : null,
+        notes: String(fields.notes || '').trim(),
+        dateAdded: nowISO(),
+        dateRead: null,
+        sortOrder: order,
+        sourceId: typeof fields.sourceId === 'string' ? fields.sourceId : null,
+        coverUrl: typeof fields.coverUrl === 'string' ? fields.coverUrl : '',
+        issueNumber: fields.issueNumber != null ? String(fields.issueNumber) : ''
+      };
+      if (entry.status === 'read') entry.dateRead = nowISO();
+
+      data.entries.push(entry);
+      added += 1;
+    });
+
+    if (added) changed();
+    return added;
+  }
+
+  /* Fill in cover art (and issue numbers) on entries that predate covers
+   * being stored. Matched by caller; applied here in one write. */
+  function applyPatches(patches) {
+    var applied = 0;
+    (patches || []).forEach(function (patch) {
+      var entry = find(patch.id);
+      if (!entry) return;
+      var touched = false;
+      if (patch.coverUrl && !entry.coverUrl) { entry.coverUrl = patch.coverUrl; touched = true; }
+      if (patch.issueNumber && !entry.issueNumber) { entry.issueNumber = patch.issueNumber; touched = true; }
+      if (patch.sourceId && !entry.sourceId) { entry.sourceId = patch.sourceId; touched = true; }
+      if (touched) applied += 1;
+    });
+    if (applied) changed();
+    return applied;
+  }
+
   function update(id, fields) {
     var entry = find(id);
     if (!entry) return null;
@@ -364,6 +417,78 @@ CubCave.store = (function () {
     var before = data.entries.length;
     data.entries = data.entries.filter(function (e) { return e.id !== id; });
     if (data.entries.length !== before) changed();
+  }
+
+  function seriesKey(entry) {
+    return (entry.series || '').trim() || 'Other';
+  }
+
+  function issueNumberOf(entry) {
+    var raw = entry.issueNumber;
+    if (!raw) {
+      var match = String(entry.title || '').match(/#\s*([0-9]+(?:\.[0-9]+)?)/);
+      raw = match ? match[1] : '';
+    }
+    var value = parseFloat(raw);
+    return isNaN(value) ? Infinity : value;
+  }
+
+  /* The queue is ordered by series, since issues within a run are read in
+   * number order anyway. Moving a series renumbers every queued entry so the
+   * ordering stays a simple ascending sequence rather than a sparse mess. */
+  function queueSeriesOrder() {
+    var lowest = {};
+    var order = [];
+    data.entries.forEach(function (entry) {
+      if (entry.status !== 'next') return;
+      var key = seriesKey(entry);
+      if (!(key in lowest)) { lowest[key] = entry.sortOrder; order.push(key); }
+      else lowest[key] = Math.min(lowest[key], entry.sortOrder);
+    });
+    return order.sort(function (a, b) { return lowest[a] - lowest[b]; });
+  }
+
+  function moveSeriesInQueue(seriesName, direction) {
+    var order = queueSeriesOrder();
+    var index = order.indexOf(seriesName);
+    if (index === -1) return false;
+
+    var target = index + (direction === 'up' ? -1 : 1);
+    if (target < 0 || target >= order.length) return false;
+
+    var swap = order[index];
+    order[index] = order[target];
+    order[target] = swap;
+
+    var position = 0;
+    order.forEach(function (key) {
+      data.entries
+        .filter(function (e) { return e.status === 'next' && seriesKey(e) === key; })
+        .sort(function (a, b) { return issueNumberOf(a) - issueNumberOf(b); })
+        .forEach(function (entry) { entry.sortOrder = position++; });
+    });
+
+    changed();
+    return true;
+  }
+
+  /* Remove a whole series: every issue of it, and the follow if there is one.
+   * Returns what was removed so the UI can say. */
+  function removeSeries(seriesName) {
+    var before = data.entries.length;
+    data.entries = data.entries.filter(function (e) {
+      return seriesKey(e) !== seriesName;
+    });
+    var removedIssues = before - data.entries.length;
+
+    var subsBefore = data.subscriptions.length;
+    data.subscriptions = data.subscriptions.filter(function (s) {
+      return s.seriesName !== seriesName;
+    });
+    var unfollowed = subsBefore - data.subscriptions.length;
+
+    if (removedIssues || unfollowed) changed();
+    return { issues: removedIssues, unfollowed: unfollowed };
   }
 
   // Swap sortOrder with the neighbour above/below in the queue.
@@ -482,11 +607,16 @@ CubCave.store = (function () {
     find: find,
     byStatus: byStatus,
     add: add,
+    addMany: addMany,
+    applyPatches: applyPatches,
     update: update,
     markRead: markRead,
     markSeriesRead: markSeriesRead,
     remove: remove,
     moveInQueue: moveInQueue,
+    moveSeriesInQueue: moveSeriesInQueue,
+    queueSeriesOrder: queueSeriesOrder,
+    removeSeries: removeSeries,
     getSubscriptions: getSubscriptions,
     isSubscribed: isSubscribed,
     addSubscription: addSubscription,
