@@ -490,7 +490,7 @@ textarea.field__input { resize: vertical; min-height: 60px; }
   background: var(--bg);
   overflow: hidden;
   /* Long result lists must not push the form's buttons off screen. */
-  max-height: 260px;
+  max-height: 320px;
   overflow-y: auto;
 }
 

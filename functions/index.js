@@ -148,7 +148,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ||
 const EXPECTED_AUDIENCE = process.env.GOOGLE_WEB_CLIENT_ID || '';
 
 const SEARCH_TIMEOUT_MS = 8000;
-const MAX_RESULTS = 8;
+const MAX_RESULTS = 20;
 
 /* Comic Vine's search has no date relevance: asking for 8 results for
  * "batman 14" returns eight issues all titled "Batman #14" from runs going
@@ -159,7 +159,66 @@ const MAX_RESULTS = 8;
  * request — puts current and forthcoming issues at the top, which is what
  * someone tracking releases is looking for. Undated records sink to the
  * bottom: they can never drive a notification. */
-const UPSTREAM_LIMIT = 30;
+const UPSTREAM_LIMIT = 100;
+
+/* ---------- relevance ----------
+ *
+ * Upstream search returns matches in its own order, which is neither
+ * similarity nor date. Ranking here means one request can be cast wide and
+ * still show the right thing first.
+ */
+
+function normaliseText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/* A trailing number is almost always an issue number ("batman 14"), so it is
+ * split off and matched separately from the series words. */
+function parseQuery(query) {
+  const cleaned = normaliseText(query);
+  const match = cleaned.match(/^(.*?)\s*(\d+)$/);
+  const text = match ? match[1] : cleaned;
+  return {
+    tokens: text ? text.split(' ').filter(Boolean) : [],
+    number: match ? match[2] : null
+  };
+}
+
+function relevanceScore(parsed, item) {
+  const series = normaliseText(item.series);
+  const seriesTokens = series ? series.split(' ') : [];
+  let score = 0;
+
+  // How much of what was typed appears in the series name.
+  if (parsed.tokens.length) {
+    let matched = 0;
+    parsed.tokens.forEach((token) => {
+      if (seriesTokens.includes(token)) matched += 1;
+      else if (seriesTokens.some((s) => s.startsWith(token))) matched += 0.7;
+      else if (series.includes(token)) matched += 0.4;
+    });
+    score += (matched / parsed.tokens.length) * 100;
+  }
+
+  const joined = parsed.tokens.join(' ');
+  if (series && series === joined) score += 60;            // exact series
+  else if (series.startsWith(joined + ' ')) score += 25;    // "Batman ..."
+
+  /* Words in the series that weren't typed usually mean a different book:
+   * "Batman: Urban Legends" is not what someone typing "batman" wants. */
+  score -= Math.max(0, seriesTokens.length - parsed.tokens.length) * 6;
+
+  if (parsed.number) {
+    if (item.issueNumber === parsed.number) score += 70;
+    else score -= 15;
+  }
+
+  return score;
+}
 
 /* Two caches, both bounded. The search cache spares Comic Vine's 400-per-15-
  * minutes limit while typing; the token cache spares Google a tokeninfo call
@@ -317,29 +376,26 @@ functions.http('comicSearch', async (req, res) => {
       );
     }
 
-    /* A trailing number in the query is almost always an issue number
-     * ("batman 14"), so matches on it rank first — otherwise a #69 whose story
-     * title happens to contain "14" outranks the issue actually asked for. */
-    const wantedNumber = (query.match(/(\d+)\s*$/) || [])[1] || null;
+    const parsed = parseQuery(query);
 
     const results = (body.results || [])
       .map(mapIssue)
       // An entry with no date at all can't drive a release notification, but
       // it's still a valid thing to track, so keep it and let the UI say so.
       .filter((r) => r.title)
+      .map((r) => ({ item: r, score: relevanceScore(parsed, r) }))
       .sort((a, b) => {
-        if (wantedNumber) {
-          const aExact = a.issueNumber === wantedNumber ? 0 : 1;
-          const bExact = b.issueNumber === wantedNumber ? 0 : 1;
-          if (aExact !== bExact) return aExact - bExact;
-        }
-        // Then dated before undated, and newest first — forthcoming at the top.
-        if (!a.releaseDate && !b.releaseDate) return 0;
-        if (!a.releaseDate) return 1;
-        if (!b.releaseDate) return -1;
-        return b.releaseDate.localeCompare(a.releaseDate);
+        // Similarity to what was typed decides the order. Date only breaks
+        // ties between equally good matches — newest first, since a tracker
+        // is usually reaching for a current issue.
+        if (b.score !== a.score) return b.score - a.score;
+        if (!a.item.releaseDate && !b.item.releaseDate) return 0;
+        if (!a.item.releaseDate) return 1;
+        if (!b.item.releaseDate) return -1;
+        return b.item.releaseDate.localeCompare(a.item.releaseDate);
       })
-      .slice(0, MAX_RESULTS);
+      .slice(0, MAX_RESULTS)
+      .map((scored) => scored.item);
 
     cacheSet(searchCache, key, results);
     res.set('X-Cache', 'miss');
