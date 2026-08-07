@@ -361,6 +361,36 @@ Test the proxy with no key, no network and no quota used:
 node functions/test-search.js
 ```
 
+## The library view
+
+Issues are grouped into their series and shown as cover art.
+
+- Each tab shows a **grid of series**, with a badge for how many of that series
+  are in the list you're looking at, and the total tracked underneath.
+- The cover shown for a series is its **earliest tracked issue's** cover.
+- **Tap a series** to open it and see every issue of it, whatever list each is
+  in, sorted by issue number.
+- Inside a series, tap a cover to edit, or use the button under it to move that
+  one issue along (Queue → Start → Read, or Unread).
+- **Mark released issues read** does the whole series at once. It's a two-step
+  button, and it deliberately **skips issues dated in the future** — you can't
+  have read something that isn't out, and marking them would hide them from the
+  release notifications they exist for.
+
+Entries with no series are grouped under **Other**.
+
+Covers come from the comic database and are hotlinked, so they need a
+connection. When one is missing or fails to load, the tile falls back to the
+series initials rather than showing a broken image.
+
+### Icons
+
+`icons/source.png` is the artwork; `node tools/make-icons.js` regenerates every
+size from it. The generator handles 8-bit RGBA non-interlaced PNGs and fails
+loudly on anything else. If the artwork has its own opaque background, that
+colour is extended for the maskable and iOS icons — otherwise the inset shows a
+visible square where one dark meets another.
+
 ## Following a series
 
 The **Upcoming** tab has a *Following* card. Follow a series and its new issues

@@ -53,14 +53,14 @@
 
 
   <section class="panel is-active" id="panel-reading" role="tabpanel" aria-labelledby="tab-reading">
-    <ul class="entry-list" data-list="reading"></ul>
+    <div class="series-grid" data-grid="reading"></div>
     <p class="empty" data-empty="reading">
       Nothing in progress. Whatever you're partway through goes here &mdash; e.g. <em>Batman #14</em>.
     </p>
   </section>
 
   <section class="panel" id="panel-next" role="tabpanel" aria-labelledby="tab-next" hidden>
-    <ul class="entry-list" data-list="next"></ul>
+    <div class="series-grid" data-grid="next"></div>
     <p class="empty" data-empty="next">
       The queue is empty. Issues you've got lined up to read next go here, in order.
     </p>
@@ -91,17 +91,33 @@
       <ul class="follow-list" id="follow-list"></ul>
     </div>
 
-    <ul class="entry-list" data-list="upcoming"></ul>
+    <div class="series-grid" data-grid="upcoming"></div>
     <p class="empty" data-empty="upcoming">
       Nothing on the calendar. Add issues with a release date and you'll get a notification the day they drop.
     </p>
   </section>
 
   <section class="panel" id="panel-read" role="tabpanel" aria-labelledby="tab-read" hidden>
-    <ul class="entry-list" data-list="read"></ul>
+    <div class="series-grid" data-grid="read"></div>
     <p class="empty" data-empty="read">
       No finished issues yet.
     </p>
+  </section>
+
+  <!-- One series, every issue of it, whatever list each issue is in. -->
+  <section class="series-view" id="series-view" hidden>
+    <div class="series-head">
+      <button class="btn series-head__back" type="button" id="series-back-btn"
+              aria-label="Back to all series">&larr;</button>
+      <div class="series-head__info">
+        <h2 class="series-head__title" id="series-view-title"></h2>
+        <p class="series-head__meta" id="series-view-meta"></p>
+      </div>
+    </div>
+    <div class="series-head__actions">
+      <button class="btn" type="button" id="series-read-all-btn">Mark released issues read</button>
+    </div>
+    <div class="issue-grid" id="series-issues"></div>
   </section>
 
 </main>

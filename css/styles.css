@@ -170,47 +170,187 @@ body {
 
 .empty em { color: var(--text); font-style: normal; }
 
-/* ---------- entry cards ---------- */
+/* ---------- cover grids ---------- */
 
-.entry {
+/* Two columns on a phone, more as the screen allows. Covers are the point,
+   so tiles are sized by the art rather than the text. */
+.series-grid,
+.issue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.series-grid:empty { display: none; }
+
+.tile {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
 }
 
-.entry__main { min-width: 0; }
+button.tile,
+.tile__open { cursor: pointer; }
 
-.entry__title {
+button.tile:active,
+.tile__open:active { transform: translateY(1px); }
+
+.tile__open {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+/* Comic covers are close to 2:3; reserving that ratio stops the grid
+   reflowing as images arrive. */
+.tile__art {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.tile__art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.tile__fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(150deg, var(--bg-hover), var(--bg));
+  color: var(--text-dim);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+/* How many issues of this series are in the list you're looking at. */
+.tile__count {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.tile__badge {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  max-width: calc(100% - 12px);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 18, 24, 0.85);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tile__badge--live { background: rgba(87, 199, 138, 0.9); color: #06210f; }
+.tile__badge--soon { background: rgba(78, 168, 222, 0.9); color: #04202f; }
+.tile__badge--warn { background: rgba(224, 82, 99, 0.9); color: #2b0508; }
+
+.tile__label { padding: 9px 10px; }
+
+.tile__title {
+  font-size: 14px;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.entry__meta {
-  margin-top: 3px;
-  font-size: 13px;
+.tile__meta {
+  margin-top: 2px;
+  font-size: 12px;
   color: var(--text-dim);
   overflow-wrap: anywhere;
 }
 
-.entry__notes {
-  margin-top: 6px;
-  padding-left: 9px;
-  border-left: 2px solid var(--line);
-  font-size: 13px;
-  color: var(--text-dim);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.entry__actions {
+.tile__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 5px;
+  padding: 0 8px 8px;
 }
+
+.tile__actions .entry__btn {
+  flex: 1;
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+/* ---------- series detail ---------- */
+
+.series-view[hidden] { display: none; }
+
+.series-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.series-head__back {
+  min-width: 40px;
+  padding: 0 12px;
+  font-size: 17px;
+}
+
+.series-head__info { flex: 1; min-width: 0; }
+
+.series-head__title {
+  margin: 0;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.series-head__meta {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.series-head__actions {
+  margin-bottom: 14px;
+}
+
+.series-head__actions .btn {
+  width: 100%;
+  min-height: 36px;
+  font-size: 14px;
+}
+
+.series-head__actions .btn[hidden] { display: none; }
+
+/* ---------- entry buttons ---------- */
 
 .entry__btn {
   min-height: 34px;

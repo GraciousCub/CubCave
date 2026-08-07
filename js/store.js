@@ -106,7 +106,12 @@ CubCave.store = (function () {
           // Where an entry came from, e.g. "metron:127884". Set when added
           // from a search result or by a followed series, and used to avoid
           // adding the same issue twice.
-          sourceId: typeof e.sourceId === 'string' ? e.sourceId : null
+          sourceId: typeof e.sourceId === 'string' ? e.sourceId : null,
+          // Cover art, and the issue number on its own so issues in a series
+          // sort numerically rather than as text ("#9" before "#10").
+          coverUrl: typeof e.coverUrl === 'string' ? e.coverUrl : '',
+          issueNumber: typeof e.issueNumber === 'string' ? e.issueNumber
+                     : (typeof e.issueNumber === 'number' ? String(e.issueNumber) : '')
         };
       });
 
@@ -283,7 +288,9 @@ CubCave.store = (function () {
       dateAdded: nowISO(),
       dateRead: null,
       sortOrder: nextMaxSortOrder() + 1,
-      sourceId: typeof fields.sourceId === 'string' ? fields.sourceId : null
+      sourceId: typeof fields.sourceId === 'string' ? fields.sourceId : null,
+      coverUrl: typeof fields.coverUrl === 'string' ? fields.coverUrl : '',
+      issueNumber: fields.issueNumber != null ? String(fields.issueNumber) : ''
     };
     // Added straight to Read? Then it was finished now.
     if (entry.status === 'read') entry.dateRead = nowISO();
@@ -302,6 +309,8 @@ CubCave.store = (function () {
     if ('title' in fields) entry.title = String(fields.title || '').trim();
     if ('series' in fields) entry.series = String(fields.series || '').trim();
     if ('notes' in fields) entry.notes = String(fields.notes || '').trim();
+    if ('coverUrl' in fields) entry.coverUrl = String(fields.coverUrl || '');
+    if ('issueNumber' in fields) entry.issueNumber = String(fields.issueNumber || '');
     if ('releaseDate' in fields) {
       entry.releaseDate = isDateString(fields.releaseDate) ? fields.releaseDate : null;
     }
@@ -329,6 +338,26 @@ CubCave.store = (function () {
     entry.dateRead = nowISO();
     changed();
     return entry;
+  }
+
+  /* Mark a whole series read in one write, rather than one change event per
+   * issue (which would fire a Drive sync each time).
+   *
+   * Issues dated in the future are skipped: you can't have read something
+   * that hasn't come out, and silently marking them would hide them from the
+   * release notifications they exist for. Returns how many were changed. */
+  function markSeriesRead(seriesName, today) {
+    var changedCount = 0;
+    data.entries.forEach(function (entry) {
+      if ((entry.series || '') !== seriesName) return;
+      if (entry.status === 'read') return;
+      if (entry.releaseDate && today && entry.releaseDate > today) return;
+      entry.status = 'read';
+      entry.dateRead = nowISO();
+      changedCount += 1;
+    });
+    if (changedCount) changed();
+    return changedCount;
   }
 
   function remove(id) {
@@ -455,6 +484,7 @@ CubCave.store = (function () {
     add: add,
     update: update,
     markRead: markRead,
+    markSeriesRead: markSeriesRead,
     remove: remove,
     moveInQueue: moveInQueue,
     getSubscriptions: getSubscriptions,

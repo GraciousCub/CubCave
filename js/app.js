@@ -98,87 +98,289 @@ function actionButton(action, id, label, options) {
   return btn;
 }
 
-function createCard(entry, index, total) {
-  var li = el('li', 'entry');
-  li.dataset.id = entry.id;
+/* ---------- grouping by series ---------- */
 
-  var main = el('div', 'entry__main');
-  main.appendChild(el('div', 'entry__title', entry.title));
+// Entries with no series still need somewhere to live.
+function seriesKeyOf(entry) {
+  return (entry.series || '').trim() || 'Other';
+}
 
-  // Meta line: series, then a status-appropriate date.
-  var bits = [];
-  if (entry.series) bits.push(entry.series);
+/* Sort by issue number, not by title text — otherwise "#10" lands before
+ * "#9". Falls back to the number in the title when the field is empty
+ * (entries typed by hand before search existed). */
+function issueNumberValue(entry) {
+  var raw = entry.issueNumber;
+  if (!raw) {
+    var match = String(entry.title || '').match(/#\s*([0-9]+(?:\.[0-9]+)?)/);
+    raw = match ? match[1] : '';
+  }
+  var value = parseFloat(raw);
+  return isNaN(value) ? Infinity : value;
+}
 
-  var meta = el('div', 'entry__meta');
-  if (bits.length) meta.appendChild(document.createTextNode(bits.join(' · ')));
+function sortIssues(entries) {
+  return entries.slice().sort(function (a, b) {
+    var diff = issueNumberValue(a) - issueNumberValue(b);
+    if (diff && isFinite(diff)) return diff;
+    return String(a.releaseDate || '').localeCompare(String(b.releaseDate || ''));
+  });
+}
 
-  if (entry.status === 'upcoming') {
-    var rel = describeRelease(entry.releaseDate);
-    if (bits.length) meta.appendChild(document.createTextNode(' · '));
-    var badge = el('span', 'badge' + (rel.tone ? ' badge--' + rel.tone : ''), rel.text);
-    meta.appendChild(badge);
-  } else if (entry.status === 'read' && entry.dateRead) {
-    var stamp = 'Read ' + formatTimestamp(entry.dateRead);
-    meta.appendChild(document.createTextNode((bits.length ? ' · ' : '') + stamp));
+function entriesInSeries(name) {
+  return store.all().filter(function (e) { return seriesKeyOf(e) === name; });
+}
+
+function groupBySeries(entries) {
+  var groups = {};
+  var order = [];
+  entries.forEach(function (entry) {
+    var key = seriesKeyOf(entry);
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(entry);
+  });
+  return { groups: groups, order: order.sort() };
+}
+
+/* ---------- cover art ---------- */
+
+function initialsOf(name) {
+  return String(name || '?')
+    .replace(/^(the|a)\s+/i, '')
+    .split(/\s+/).slice(0, 2)
+    .map(function (word) { return word.charAt(0); })
+    .join('').toUpperCase() || '?';
+}
+
+// A series is represented by its earliest issue's cover.
+function coverForSeries(entries) {
+  var sorted = sortIssues(entries);
+  for (var i = 0; i < sorted.length; i++) {
+    if (sorted[i].coverUrl) return sorted[i].coverUrl;
+  }
+  return '';
+}
+
+function artElement(coverUrl, label) {
+  var art = el('div', 'tile__art');
+
+  if (!coverUrl) {
+    art.appendChild(el('div', 'tile__fallback', initialsOf(label)));
+    return art;
   }
 
-  if (meta.childNodes.length) main.appendChild(meta);
-  if (entry.notes) main.appendChild(el('div', 'entry__notes', entry.notes));
+  var img = document.createElement('img');
+  img.alt = '';
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  // Covers are hotlinked from the comic database; some hosts reject requests
+  // carrying a referrer.
+  img.referrerPolicy = 'no-referrer';
+  img.addEventListener('error', function () {
+    // Offline, moved, or blocked — show initials rather than a broken image.
+    img.remove();
+    art.appendChild(el('div', 'tile__fallback', initialsOf(label)));
+  });
+  img.src = coverUrl;
+  art.appendChild(img);
+  return art;
+}
 
-  li.appendChild(main);
+/* ---------- tiles ---------- */
 
-  var actions = el('div', 'entry__actions');
+function statusBadge(entry) {
+  if (entry.status === 'read') return { text: 'Read', tone: '' };
+  if (entry.status === 'upcoming') return describeRelease(entry.releaseDate);
+  if (entry.status === 'reading') return { text: 'Reading', tone: 'soon' };
+  return { text: 'Queued', tone: '' };
+}
 
-  if (entry.status === 'next') {
-    actions.appendChild(actionButton('up', entry.id, 'Move up',
-      { text: '↑', className: 'entry__btn--icon', disabled: index === 0 }));
-    actions.appendChild(actionButton('down', entry.id, 'Move down',
-      { text: '↓', className: 'entry__btn--icon', disabled: index === total - 1 }));
-  }
+function createSeriesTile(name, inThisList, allIssues) {
+  var tile = el('button', 'tile tile--series');
+  tile.type = 'button';
+  tile.setAttribute('aria-label', 'Open ' + name);
 
-  // One-tap moves along the natural path of a comic: upcoming → queue →
-  // reading → read, plus a way back out of Read.
+  var art = artElement(coverForSeries(allIssues), name);
+
+  // How many of this series are in the list you're looking at.
+  art.appendChild(el('span', 'tile__count', String(inThisList.length)));
+  tile.appendChild(art);
+
+  var label = el('div', 'tile__label');
+  label.appendChild(el('div', 'tile__title', name));
+  label.appendChild(el('div', 'tile__meta',
+    allIssues.length + (allIssues.length === 1 ? ' issue tracked' : ' issues tracked')));
+  tile.appendChild(label);
+
+  tile.addEventListener('click', function () { openSeriesView(name); });
+  return tile;
+}
+
+function createIssueTile(entry) {
+  var tile = el('div', 'tile tile--issue');
+  tile.dataset.id = entry.id;
+
+  var open = el('button', 'tile__open');
+  open.type = 'button';
+  open.setAttribute('aria-label', 'Edit ' + entry.title);
+
+  var art = artElement(entry.coverUrl, entry.title);
+  var badge = statusBadge(entry);
+  art.appendChild(el('span', 'tile__badge' + (badge.tone ? ' tile__badge--' + badge.tone : ''),
+                     badge.text));
+  open.appendChild(art);
+
+  var label = el('div', 'tile__label');
+  label.appendChild(el('div', 'tile__title',
+    entry.issueNumber ? '#' + entry.issueNumber : entry.title));
+  label.appendChild(el('div', 'tile__meta',
+    entry.status === 'read'
+      ? (entry.dateRead ? 'Read ' + formatTimestamp(entry.dateRead) : 'Read')
+      : (entry.releaseDate ? formatDay(entry.releaseDate) : 'No date')));
+  open.appendChild(label);
+
+  open.addEventListener('click', function () { openForm(entry); });
+  tile.appendChild(open);
+
+  var actions = el('div', 'tile__actions');
   if (entry.status === 'upcoming') {
-    actions.appendChild(actionButton('queue', entry.id, 'Move to Reading next',
-      { text: '→ Queue' }));
+    actions.appendChild(actionButton('queue', entry.id, 'Move to Reading next', { text: '→ Queue' }));
   } else if (entry.status === 'next') {
-    actions.appendChild(actionButton('start', entry.id, 'Start reading now',
-      { text: '▶ Start' }));
+    actions.appendChild(actionButton('start', entry.id, 'Start reading now', { text: '▶ Start' }));
   } else if (entry.status === 'read') {
-    actions.appendChild(actionButton('unread', entry.id, 'Move back to Currently reading',
-      { text: '↩ Unread' }));
+    actions.appendChild(actionButton('unread', entry.id, 'Move back to Currently reading', { text: '↩ Unread' }));
   }
-
   if (entry.status !== 'read') {
     actions.appendChild(actionButton('read', entry.id, 'Mark as read',
       { text: '✓ Read', className: 'entry__btn--go' }));
   }
+  tile.appendChild(actions);
 
-  actions.appendChild(actionButton('edit', entry.id, 'Edit ' + entry.title, { text: 'Edit' }));
-
-  li.appendChild(actions);
-  return li;
+  return tile;
 }
 
-function render() {
-  store.STATUSES.forEach(function (status) {
-    var list = document.querySelector('[data-list="' + status + '"]');
-    var entries = store.byStatus(status);
+/* ---------- views ---------- */
 
-    list.textContent = '';
-    entries.forEach(function (entry, i) {
-      list.appendChild(createCard(entry, i, entries.length));
+var openSeries = null;   // series name while the detail view is showing
+
+var seriesView = document.getElementById('series-view');
+var seriesViewTitle = document.getElementById('series-view-title');
+var seriesViewMeta = document.getElementById('series-view-meta');
+var seriesIssues = document.getElementById('series-issues');
+var seriesReadAllBtn = document.getElementById('series-read-all-btn');
+
+function openSeriesView(name) {
+  openSeries = name;
+  disarmReadAll();
+  render();
+  document.querySelector('.content').scrollTop = 0;
+}
+
+function closeSeriesView() {
+  openSeries = null;
+  disarmReadAll();
+  render();
+}
+
+function applyViewVisibility() {
+  var showingSeries = !!openSeries;
+  document.getElementById('tabs').hidden = showingSeries;
+  seriesView.hidden = !showingSeries;
+  document.querySelectorAll('.panel').forEach(function (panel) {
+    panel.hidden = showingSeries || panel.id !== 'panel-' + currentTab();
+  });
+}
+
+function renderLibrary() {
+  store.STATUSES.forEach(function (status) {
+    var grid = document.querySelector('[data-grid="' + status + '"]');
+    var entries = store.byStatus(status);
+    var grouped = groupBySeries(entries);
+
+    grid.textContent = '';
+    grouped.order.forEach(function (name) {
+      grid.appendChild(createSeriesTile(name, grouped.groups[name], entriesInSeries(name)));
     });
 
     var empty = document.querySelector('[data-empty="' + status + '"]');
     if (empty) empty.hidden = entries.length > 0;
 
+    // The tab badge counts issues, not series — more useful at a glance.
     var count = document.querySelector('[data-count="' + status + '"]');
     if (count) count.textContent = String(entries.length);
   });
+}
 
+function renderSeriesView() {
+  var issues = sortIssues(entriesInSeries(openSeries));
+
+  // Everything in it was deleted while it was open.
+  if (!issues.length) {
+    closeSeriesView();
+    return;
+  }
+
+  seriesViewTitle.textContent = openSeries;
+
+  var counts = {};
+  issues.forEach(function (e) { counts[e.status] = (counts[e.status] || 0) + 1; });
+  var parts = [issues.length + (issues.length === 1 ? ' issue' : ' issues')];
+  store.STATUSES.forEach(function (status) {
+    if (counts[status]) parts.push(counts[status] + ' ' + LIST_LABELS[status].toLowerCase());
+  });
+  seriesViewMeta.textContent = parts.join(' · ');
+
+  seriesIssues.textContent = '';
+  issues.forEach(function (entry) { seriesIssues.appendChild(createIssueTile(entry)); });
+
+  // Nothing to mark means no button.
+  var today = todayISO();
+  var markable = issues.filter(function (e) {
+    return e.status !== 'read' && !(e.releaseDate && e.releaseDate > today);
+  });
+  seriesReadAllBtn.hidden = !markable.length;
+  seriesReadAllBtn.dataset.count = String(markable.length);
+}
+
+function render() {
+  applyViewVisibility();
+  if (openSeries) renderSeriesView();
+  else renderLibrary();
   refreshReleaseNotice();
 }
+
+/* ---------- whole-series actions ---------- */
+
+var readAllArmed = false;
+var readAllTimer = null;
+
+function disarmReadAll() {
+  readAllArmed = false;
+  clearTimeout(readAllTimer);
+  seriesReadAllBtn.textContent = 'Mark released issues read';
+  seriesReadAllBtn.classList.remove('btn--armed');
+}
+
+seriesReadAllBtn.addEventListener('click', function () {
+  var count = Number(seriesReadAllBtn.dataset.count || 0);
+  if (!count) return;
+
+  // Two-step, like Delete: marking a dozen issues read by accident is
+  // tedious to undo one at a time.
+  if (!readAllArmed) {
+    readAllArmed = true;
+    seriesReadAllBtn.textContent = 'Tap again: mark ' + count +
+      (count === 1 ? ' issue read' : ' issues read');
+    seriesReadAllBtn.classList.add('btn--armed');
+    readAllTimer = setTimeout(disarmReadAll, 5000);
+    return;
+  }
+
+  disarmReadAll();
+  var marked = store.markSeriesRead(openSeries, todayISO());
+  toast('Marked ' + marked + (marked === 1 ? ' issue' : ' issues') + ' read.');
+});
+
+document.getElementById('series-back-btn').addEventListener('click', closeSeriesView);
 
 // A quiet heads-up on the Upcoming tab when something has already dropped —
 // the daily push (Phase 5) covers the phone, this covers opening the app.
@@ -249,6 +451,10 @@ var deleteBtn = document.getElementById('delete-btn');
 var dialogTitle = document.getElementById('dialog-title');
 
 var editingId = null;
+
+/* Cover art and issue number picked up from a search result. Held aside
+ * because the form has no fields for them — they aren't things to type. */
+var pendingFromSearch = null;
 
 /* ---------- live comic search ---------- */
 
@@ -324,6 +530,13 @@ function applySuggestion(item) {
   if (item.series) fSeries.value = item.series;
   if (item.releaseDate) fRelease.value = item.releaseDate;
 
+  // Carried through the form so the tile has cover art and sorts correctly.
+  pendingFromSearch = {
+    coverUrl: item.coverUrl || '',
+    issueNumber: item.issueNumber || '',
+    sourceId: item.source && item.sourceId ? item.source + ':' + item.sourceId : null
+  };
+
   // Only force the list when the comic genuinely hasn't come out yet.
   // A back issue could belong in any list, so leave that choice alone.
   if (item.releaseDate && daysUntil(item.releaseDate) > 0) {
@@ -375,6 +588,7 @@ function openForm(entry) {
   editingId = entry ? entry.id : null;
   formError.hidden = true;
   disarmDelete();
+  pendingFromSearch = null;
 
   // Never carry a previous search's results into a freshly opened sheet.
   CubCave.search.cancel();
@@ -415,6 +629,12 @@ form.addEventListener('submit', function (event) {
     releaseDate: fRelease.value || null,
     notes: fNotes.value.trim()
   };
+
+  if (pendingFromSearch) {
+    fields.coverUrl = pendingFromSearch.coverUrl;
+    fields.issueNumber = pendingFromSearch.issueNumber;
+    if (pendingFromSearch.sourceId) fields.sourceId = pendingFromSearch.sourceId;
+  }
 
   if (editingId) {
     store.update(editingId, fields);
@@ -490,9 +710,9 @@ function selectTab(name) {
     tab.setAttribute('aria-selected', String(active));
   });
 
-  document.querySelectorAll('.panel').forEach(function (panel) {
-    panel.hidden = panel.id !== 'panel-' + name;
-  });
+  // Changing list leaves any open series behind.
+  openSeries = null;
+  applyViewVisibility();
 
   try {
     localStorage.setItem('cubcave.tab', name);
@@ -599,7 +819,9 @@ function followSeries(item) {
         status: 'upcoming',
         releaseDate: issue.releaseDate,
         notes: 'Added automatically from ' + item.seriesName + '.',
-        sourceId: sourceId
+        sourceId: sourceId,
+        coverUrl: issue.coverUrl || '',
+        issueNumber: issue.issueNumber || ''
       });
       added += 1;
     });

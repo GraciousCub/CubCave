@@ -1,8 +1,11 @@
-/* Generates the PWA icon set. Dependency-free: raw pixels -> PNG via zlib.
+/* Generates the PWA icon set from icons/source.png.
  *
  *   node tools/make-icons.js
  *
- * Re-run after changing the palette or artwork below.
+ * Dependency-free: decodes the source PNG, box-downsamples it, and re-encodes.
+ * Only 8-bit RGBA, non-interlaced PNGs are supported — that's what the source
+ * is, and handling every PNG variant isn't worth the code here. It fails with
+ * a clear message rather than producing something subtly wrong.
  */
 
 'use strict';
@@ -11,7 +14,91 @@ var fs = require('fs');
 var path = require('path');
 var zlib = require('zlib');
 
-/* ---------- minimal PNG encoder ---------- */
+var SOURCE = path.join(__dirname, '..', 'icons', 'source.png');
+var OUT_DIR = path.join(__dirname, '..', 'icons');
+
+/* Matches the app background, so icons that composite onto a solid colour
+   sit on the same dark as the app itself. */
+var BACKDROP = [15, 18, 24, 255];
+
+/* ---------- PNG decode ---------- */
+
+function decodePNG(buffer) {
+  if (buffer.slice(0, 8).toString('hex') !== '89504e470d0a1a0a') {
+    throw new Error('Not a PNG file.');
+  }
+
+  var width = 0, height = 0, bitDepth = 0, colorType = 0, interlace = 0;
+  var idat = [];
+  var offset = 8;
+
+  while (offset < buffer.length) {
+    var length = buffer.readUInt32BE(offset);
+    var type = buffer.toString('ascii', offset + 4, offset + 8);
+    var data = buffer.slice(offset + 8, offset + 8 + length);
+
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      interlace = data[12];
+    } else if (type === 'IDAT') {
+      idat.push(data);
+    } else if (type === 'IEND') {
+      break;
+    }
+    offset += 12 + length;   // length + type + data + crc
+  }
+
+  if (bitDepth !== 8 || colorType !== 6 || interlace !== 0) {
+    throw new Error(
+      'Only 8-bit RGBA, non-interlaced PNGs are supported ' +
+      '(got bitDepth=' + bitDepth + ', colorType=' + colorType +
+      ', interlace=' + interlace + '). Re-export the source as RGBA PNG.'
+    );
+  }
+
+  var raw = zlib.inflateSync(Buffer.concat(idat));
+  var bpp = 4;
+  var stride = width * bpp;
+  var out = Buffer.alloc(stride * height);
+
+  /* Undo the per-scanline filters. Each row is prefixed with a filter byte;
+     types 1-4 predict each byte from its left/up/upper-left neighbours. */
+  for (var y = 0; y < height; y++) {
+    var filter = raw[y * (stride + 1)];
+    var line = raw.slice(y * (stride + 1) + 1, y * (stride + 1) + 1 + stride);
+    var prev = y > 0 ? out.slice((y - 1) * stride, y * stride) : Buffer.alloc(stride);
+    var row = out.slice(y * stride, (y + 1) * stride);
+
+    for (var x = 0; x < stride; x++) {
+      var value = line[x];
+      var a = x >= bpp ? row[x - bpp] : 0;   // left
+      var b = prev[x];                        // up
+      var c = x >= bpp ? prev[x - bpp] : 0;   // upper-left
+
+      switch (filter) {
+        case 0: row[x] = value; break;
+        case 1: row[x] = (value + a) & 0xff; break;
+        case 2: row[x] = (value + b) & 0xff; break;
+        case 3: row[x] = (value + ((a + b) >> 1)) & 0xff; break;
+        case 4: {
+          var p = a + b - c;
+          var pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+          var pred = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+          row[x] = (value + pred) & 0xff;
+          break;
+        }
+        default: throw new Error('Unknown PNG filter type ' + filter);
+      }
+    }
+  }
+
+  return { width: width, height: height, data: out };
+}
+
+/* ---------- PNG encode ---------- */
 
 var CRC_TABLE = (function () {
   var table = new Int32Array(256);
@@ -42,18 +129,14 @@ function encodePNG(width, height, rgba) {
   var stride = width * 4;
   var raw = Buffer.alloc((stride + 1) * height);
   for (var y = 0; y < height; y++) {
-    raw[y * (stride + 1)] = 0; // filter type: none
+    raw[y * (stride + 1)] = 0;
     rgba.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
   }
 
   var ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8;  // bit depth
-  ihdr[9] = 6;  // colour type: RGBA
-  ihdr[10] = 0; // compression
-  ihdr[11] = 0; // filter
-  ihdr[12] = 0; // interlace
+  ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
 
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -63,131 +146,114 @@ function encodePNG(width, height, rgba) {
   ]);
 }
 
-/* ---------- tiny drawing surface (with 3x supersampling for smooth edges) ---------- */
+/* ---------- resize ---------- */
 
-var SS = 3;
+/* Box filter: averages every source pixel falling inside each destination
+   pixel. For big downscales that beats nearest-neighbour comfortably, and
+   alpha is weighted so transparent edges don't darken. */
+function resize(src, size) {
+  var out = Buffer.alloc(size * size * 4);
+  var scale = src.width / size;
 
-function Surface(size) {
-  this.size = size * SS;
-  this.scale = SS;
-  this.px = Buffer.alloc(this.size * this.size * 4);
-}
+  for (var y = 0; y < size; y++) {
+    var sy0 = Math.floor(y * scale);
+    var sy1 = Math.min(src.height, Math.max(sy0 + 1, Math.ceil((y + 1) * scale)));
 
-Surface.prototype.blend = function (x, y, color) {
-  if (x < 0 || y < 0 || x >= this.size || y >= this.size) return;
-  var i = (y * this.size + x) * 4;
-  var a = color[3] / 255;
-  this.px[i]     = Math.round(this.px[i]     * (1 - a) + color[0] * a);
-  this.px[i + 1] = Math.round(this.px[i + 1] * (1 - a) + color[1] * a);
-  this.px[i + 2] = Math.round(this.px[i + 2] * (1 - a) + color[2] * a);
-  this.px[i + 3] = Math.round(this.px[i + 3] + (255 - this.px[i + 3]) * a);
-};
+    for (var x = 0; x < size; x++) {
+      var sx0 = Math.floor(x * scale);
+      var sx1 = Math.min(src.width, Math.max(sx0 + 1, Math.ceil((x + 1) * scale)));
 
-// x, y, w, h, r are in unscaled units.
-Surface.prototype.roundRect = function (x, y, w, h, r, color) {
-  var s = this.scale;
-  var x0 = Math.round(x * s), y0 = Math.round(y * s);
-  var x1 = Math.round((x + w) * s), y1 = Math.round((y + h) * s);
-  var rr = r * s;
-
-  for (var py = y0; py < y1; py++) {
-    for (var px = x0; px < x1; px++) {
-      // Distance into the corner boxes, if any.
-      var dx = px < x0 + rr ? x0 + rr - px : (px > x1 - rr - 1 ? px - (x1 - rr - 1) : 0);
-      var dy = py < y0 + rr ? y0 + rr - py : (py > y1 - rr - 1 ? py - (y1 - rr - 1) : 0);
-      if (dx > 0 && dy > 0 && dx * dx + dy * dy > rr * rr) continue;
-      this.blend(px, py, color);
-    }
-  }
-};
-
-Surface.prototype.fill = function (color) {
-  this.roundRect(0, 0, this.size / this.scale, this.size / this.scale, 0, color);
-};
-
-// Box-downsample back to the requested size.
-Surface.prototype.toPNG = function () {
-  var out = this.size / this.scale;
-  var buf = Buffer.alloc(out * out * 4);
-  var n = this.scale * this.scale;
-
-  for (var y = 0; y < out; y++) {
-    for (var x = 0; x < out; x++) {
-      var r = 0, g = 0, b = 0, a = 0;
-      for (var sy = 0; sy < this.scale; sy++) {
-        for (var sx = 0; sx < this.scale; sx++) {
-          var i = ((y * this.scale + sy) * this.size + (x * this.scale + sx)) * 4;
-          r += this.px[i]; g += this.px[i + 1]; b += this.px[i + 2]; a += this.px[i + 3];
+      var r = 0, g = 0, b = 0, a = 0, n = 0;
+      for (var sy = sy0; sy < sy1; sy++) {
+        for (var sx = sx0; sx < sx1; sx++) {
+          var i = (sy * src.width + sx) * 4;
+          var alpha = src.data[i + 3] / 255;
+          r += src.data[i] * alpha;
+          g += src.data[i + 1] * alpha;
+          b += src.data[i + 2] * alpha;
+          a += src.data[i + 3];
+          n++;
         }
       }
-      var o = (y * out + x) * 4;
-      buf[o] = Math.round(r / n);
-      buf[o + 1] = Math.round(g / n);
-      buf[o + 2] = Math.round(b / n);
-      buf[o + 3] = Math.round(a / n);
+
+      var o = (y * size + x) * 4;
+      var alphaAvg = a / n;
+      var weight = alphaAvg / 255;
+      out[o] = weight ? Math.round(r / n / weight) : 0;
+      out[o + 1] = weight ? Math.round(g / n / weight) : 0;
+      out[o + 2] = weight ? Math.round(b / n / weight) : 0;
+      out[o + 3] = Math.round(alphaAvg);
     }
   }
-  return encodePNG(out, out, buf);
-};
 
-/* ---------- artwork: a stack of three comic issues ---------- */
-
-var BG      = [15, 18, 24, 255];
-var PAPER   = [231, 234, 240, 255];
-var SPINE_A = [242, 193, 78, 255];   // gold
-var SPINE_B = [78, 168, 222, 255];   // blue
-var SPINE_C = [224, 82, 99, 255];    // red
-var INK     = [15, 18, 24, 60];
-
-/* `inset` is the fraction of the canvas left as padding around the artwork.
-   Maskable icons need a bigger margin because launchers crop to a circle. */
-function draw(size, inset) {
-  var s = new Surface(size);
-  s.fill(BG);
-
-  var art = size * (1 - inset * 2);
-  var ox = size * inset;
-  var oy = size * inset;
-
-  var bookW = art;
-  var bookH = art * 0.235;
-  var gap = art * 0.13;
-  var radius = bookH * 0.22;
-  var spines = [SPINE_A, SPINE_B, SPINE_C];
-
-  for (var i = 0; i < 3; i++) {
-    // Slight stair-step so the stack reads as separate issues.
-    var x = ox + (i * art * 0.055);
-    var y = oy + art * 0.075 + i * (bookH + gap);
-    var w = bookW - (i * art * 0.055);
-
-    s.roundRect(x, y, w, bookH, radius, PAPER);
-    s.roundRect(x, y, w * 0.17, bookH, radius, spines[i]);
-
-    // Two hint lines standing in for cover text.
-    var lineX = x + w * 0.26;
-    s.roundRect(lineX, y + bookH * 0.3,  w * 0.5,  bookH * 0.12, bookH * 0.06, INK);
-    s.roundRect(lineX, y + bookH * 0.56, w * 0.33, bookH * 0.12, bookH * 0.06, INK);
-  }
-
-  return s.toPNG();
+  return { width: size, height: size, data: out };
 }
 
-/* ---------- write files ---------- */
+/* Places an image on a solid background, optionally inset. Maskable icons
+   need the inset: launchers crop them to a circle and anything in the outer
+   ~10% can be cut off. */
+function compose(image, size, inset, background) {
+  var canvas = Buffer.alloc(size * size * 4);
+  for (var i = 0; i < size * size; i++) {
+    canvas[i * 4] = background[0];
+    canvas[i * 4 + 1] = background[1];
+    canvas[i * 4 + 2] = background[2];
+    canvas[i * 4 + 3] = background[3];
+  }
 
-var outDir = path.join(__dirname, '..', 'icons');
-fs.mkdirSync(outDir, { recursive: true });
+  var inner = Math.round(size * (1 - inset * 2));
+  var scaled = resize(image, inner);
+  var offset = Math.round((size - inner) / 2);
+
+  for (var y = 0; y < inner; y++) {
+    for (var x = 0; x < inner; x++) {
+      var s = (y * inner + x) * 4;
+      var alpha = scaled.data[s + 3] / 255;
+      if (!alpha) continue;
+      var d = ((y + offset) * size + (x + offset)) * 4;
+      canvas[d] = Math.round(canvas[d] * (1 - alpha) + scaled.data[s] * alpha);
+      canvas[d + 1] = Math.round(canvas[d + 1] * (1 - alpha) + scaled.data[s + 1] * alpha);
+      canvas[d + 2] = Math.round(canvas[d + 2] * (1 - alpha) + scaled.data[s + 2] * alpha);
+      canvas[d + 3] = 255;
+    }
+  }
+
+  return { width: size, height: size, data: canvas };
+}
+
+/* ---------- go ---------- */
+
+if (!fs.existsSync(SOURCE)) {
+  console.error('Missing icons/source.png — put the artwork there first.');
+  process.exit(1);
+}
+
+var source = decodePNG(fs.readFileSync(SOURCE));
+console.log('source: ' + source.width + 'x' + source.height);
+
+/* If the artwork already has its own opaque background, extend THAT rather
+   than the app's colour — otherwise the inset maskable icon shows a visible
+   square where one dark meets the other. */
+if (source.data[3] === 255) {
+  BACKDROP = [source.data[0], source.data[1], source.data[2], 255];
+  console.log('backdrop taken from the artwork: rgb(' + BACKDROP.slice(0, 3).join(',') + ')');
+}
 
 var targets = [
-  ['icon-192.png',           192, 0.14],
-  ['icon-512.png',           512, 0.14],
-  ['icon-maskable-512.png',  512, 0.24],  // wider safe zone for adaptive cropping
-  ['apple-touch-icon-180.png', 180, 0.14],
-  ['favicon-32.png',          32, 0.10]
+  // name, size, inset, background (null keeps transparency)
+  ['icon-192.png', 192, 0, null],
+  ['icon-512.png', 512, 0, null],
+  // Cropped to a circle by Android launchers, so keep clear of the edges.
+  ['icon-maskable-512.png', 512, 0.14, BACKDROP],
+  // iOS ignores transparency and composites on black, so do it deliberately.
+  ['apple-touch-icon-180.png', 180, 0, BACKDROP],
+  ['favicon-32.png', 32, 0, null]
 ];
 
 targets.forEach(function (t) {
-  var file = path.join(outDir, t[0]);
-  fs.writeFileSync(file, draw(t[1], t[2]));
-  console.log('wrote', path.relative(path.join(__dirname, '..'), file));
+  var name = t[0], size = t[1], inset = t[2], background = t[3];
+  var image = background ? compose(source, size, inset, background) : resize(source, size);
+  fs.writeFileSync(path.join(OUT_DIR, name), encodePNG(size, size, image.data));
+  console.log('wrote icons/' + name + '  (' + size + 'px' +
+              (background ? ', on backdrop' : ', transparent') + ')');
 });
