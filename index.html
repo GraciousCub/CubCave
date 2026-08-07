@@ -111,8 +111,14 @@
       <span class="field__label">Title</span>
       <input class="field__input" type="text" id="f-title" name="title"
              placeholder="Batman #14" required maxlength="120"
-             autocomplete="off" enterkeyhint="next">
+             autocomplete="off" autocapitalize="words" spellcheck="false"
+             enterkeyhint="next" role="combobox" aria-expanded="false"
+             aria-autocomplete="list" aria-controls="title-suggest">
     </label>
+
+    <!-- Live results from the comic database; fills the fields when picked. -->
+    <div class="suggest" id="title-suggest" role="listbox" aria-label="Matching comics" hidden></div>
+    <p class="field__hint suggest__status" id="suggest-status" hidden></p>
 
     <label class="field">
       <span class="field__label">Series <span class="field__opt">optional</span></span>
@@ -165,6 +171,7 @@
 <script src="./js/drive.js"></script>
 <script src="./js/sync.js"></script>
 <script src="./js/push.js"></script>
+<script src="./js/search.js"></script>
 <script src="./js/app.js"></script>
 </body>
 </html>

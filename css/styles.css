@@ -479,6 +479,55 @@ textarea.field__input { resize: vertical; min-height: 60px; }
   color: var(--text-dim);
 }
 
+/* ---------- search suggestions ---------- */
+
+.suggest {
+  display: flex;
+  flex-direction: column;
+  margin-top: -6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  overflow: hidden;
+  /* Long result lists must not push the form's buttons off screen. */
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.suggest[hidden] { display: none; }
+
+.suggest__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.suggest__item:last-child { border-bottom: 0; }
+.suggest__item:hover,
+.suggest__item:focus { background: var(--bg-hover); }
+
+.suggest__title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.suggest__meta {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.suggest__status[hidden] { display: none; }
+
 .sheet__error {
   margin: 0;
   color: var(--red);

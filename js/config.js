@@ -40,5 +40,11 @@ CubCave.config = {
   vapidKey: 'BB1zgwDKyVSbHp14byoeaJQZfp-yotS6aQbnPn8Am-OCquzmbtT9g9OWAOBgKqnOMuMDI5IidAa9Hcxn3SBa7PM',
 
   // Firebase JS SDK version pulled from the CDN when notifications are enabled.
-  firebaseSdkVersion: '10.12.2'
+  firebaseSdkVersion: '10.12.2',
+
+  /* Comic search (Phase 6). The URL of the deployed comic-search function —
+   * fill in after deploying. Comic Vine sends no CORS headers and needs an API
+   * key, so the browser cannot call it directly; this proxies it and keeps the
+   * key server-side. */
+  searchEndpoint: 'https://comic-search-osxiyvcxpq-nw.a.run.app'
 };

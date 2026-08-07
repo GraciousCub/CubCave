@@ -250,6 +250,119 @@ var dialogTitle = document.getElementById('dialog-title');
 
 var editingId = null;
 
+/* ---------- live comic search ---------- */
+
+var suggestBox = document.getElementById('title-suggest');
+var suggestStatus = document.getElementById('suggest-status');
+
+var SUGGEST_STATUS = {
+  searching: 'Searching…',
+  'too-short': 'Keep typing to search the comic database.',
+  'signed-out': 'Sign in to search the comic database.',
+  offline: 'Offline — search unavailable.',
+  unconfigured: ''    // not deployed: stay silent rather than nag
+};
+
+CubCave.search.bindCurrentText(function () { return fTitle.value; });
+
+function hideSuggestions() {
+  suggestBox.hidden = true;
+  suggestBox.textContent = '';
+  fTitle.setAttribute('aria-expanded', 'false');
+}
+
+function setSuggestStatus(text) {
+  suggestStatus.textContent = text || '';
+  suggestStatus.hidden = !text;
+}
+
+function renderSuggestions(results) {
+  suggestBox.textContent = '';
+
+  if (!results.length) {
+    hideSuggestions();
+    setSuggestStatus('No matches — type the title yourself.');
+    return;
+  }
+
+  results.forEach(function (item) {
+    var row = el('button', 'suggest__item');
+    row.type = 'button';
+    row.setAttribute('role', 'option');
+
+    row.appendChild(el('span', 'suggest__title', item.title));
+
+    var bits = [];
+    if (item.storyTitle) bits.push(item.storyTitle);
+    if (item.releaseDate) {
+      bits.push(formatDay(item.releaseDate) +
+        // Cover dates are the printed month, often weeks after it hits shops.
+        // Say so, rather than quietly storing a date that won't match reality.
+        (item.dateIsApproximate ? ' (cover date)' : ''));
+    } else {
+      bits.push('no release date');
+    }
+    row.appendChild(el('span', 'suggest__meta', bits.join(' · ')));
+
+    // pointerdown, not click: the field's blur would otherwise tear this
+    // element down before a click could land on it.
+    row.addEventListener('pointerdown', function (event) {
+      event.preventDefault();
+      applySuggestion(item);
+    });
+
+    suggestBox.appendChild(row);
+  });
+
+  suggestBox.hidden = false;
+  fTitle.setAttribute('aria-expanded', 'true');
+  setSuggestStatus('');
+}
+
+function applySuggestion(item) {
+  fTitle.value = item.title;
+  if (item.series) fSeries.value = item.series;
+  if (item.releaseDate) fRelease.value = item.releaseDate;
+
+  // Only force the list when the comic genuinely hasn't come out yet.
+  // A back issue could belong in any list, so leave that choice alone.
+  if (item.releaseDate && daysUntil(item.releaseDate) > 0) {
+    fStatus.value = 'upcoming';
+  }
+  syncReleaseVisibility();
+
+  CubCave.search.cancel();
+  hideSuggestions();
+
+  var note = item.releaseDate
+    ? (item.dateIsApproximate ? 'Filled in — date is a cover date, worth checking.' : 'Filled in from the comic database.')
+    : 'Filled in — no release date on record.';
+  setSuggestStatus(note);
+}
+
+fTitle.addEventListener('input', function () {
+  CubCave.search.onInput(fTitle.value, {
+    onState: function (state) {
+      hideSuggestions();
+      setSuggestStatus(SUGGEST_STATUS[state] || '');
+    },
+    onResults: renderSuggestions,
+    onError: function (message) {
+      hideSuggestions();
+      setSuggestStatus(message);
+    }
+  });
+});
+
+fTitle.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape' && !suggestBox.hidden) {
+    // Dismiss the list without closing the whole sheet.
+    event.stopPropagation();
+    CubCave.search.cancel();
+    hideSuggestions();
+  }
+});
+
 // The release date only means anything for Upcoming, so only show it there.
 // The stored value survives while hidden, so toggling status doesn't lose it.
 function syncReleaseVisibility() {
@@ -262,6 +375,11 @@ function openForm(entry) {
   editingId = entry ? entry.id : null;
   formError.hidden = true;
   disarmDelete();
+
+  // Never carry a previous search's results into a freshly opened sheet.
+  CubCave.search.cancel();
+  hideSuggestions();
+  setSuggestStatus('');
 
   dialogTitle.textContent = entry ? 'Edit issue' : 'Add an issue';
   deleteBtn.hidden = !entry;

@@ -8,7 +8,7 @@
 
 'use strict';
 
-var CACHE_VERSION = 'cubcave-shell-v11';
+var CACHE_VERSION = 'cubcave-shell-v12';
 
 var SHELL_FILES = [
   './',
@@ -19,6 +19,7 @@ var SHELL_FILES = [
   './js/drive.js',
   './js/sync.js',
   './js/push.js',
+  './js/search.js',
   './js/app.js',
   './manifest.json',
   './icons/icon-192.png',

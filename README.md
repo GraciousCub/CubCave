@@ -291,6 +291,78 @@ One scheduled job against 3 free per month; roughly 30 invocations against
 2,000,000 free. Expected spend £0. Billing must still be enabled on the
 project, which is Google policy rather than a charge.
 
+## Comic search and autofill (Phase 6)
+
+Typing a title in the add/edit sheet searches [Comic Vine](https://comicvine.gamespot.com/api/)
+and offers matches. Picking one fills in the title, series and release date, and
+moves the entry to **Upcoming** if the comic hasn't come out yet.
+
+Comic Vine sends no CORS headers and needs an API key, so the browser can't call
+it. `comicSearch` in `functions/index.js` proxies it, keeping the key server-side.
+
+**Quota discipline.** Comic Vine allows 400 requests per 15 minutes, and typing
+"Absolute Batman" is 15 keystrokes. So: nothing fires under 3 characters,
+keystrokes are debounced 350ms, superseded requests are aborted, repeat queries
+come from a local cache without leaving the browser, the function caches for 10
+minutes on top of that, and failures are shown rather than retried.
+
+**Access control.** The endpoint is reachable without Cloud Run authentication —
+the browser can't mint an OIDC token — so the function checks it itself: the
+caller must present a Google access token issued to *this app's* OAuth client.
+Without that, the URL sits in your public JavaScript as a free comic-search API
+billed to you. `--max-instances=3` bounds the damage if it's ever hammered.
+
+Search needs you signed in. If you aren't, the sheet says so and sends nothing.
+
+**Dates:** `store_date` (the day it reaches shops) is preferred. Where Comic Vine
+only has `cover_date` — the printed month, often weeks later — the suggestion is
+labelled *(cover date)* so you know it's approximate.
+
+**Search tip: type the full series name.** Comic Vine's search has no date
+relevance, so the function requests 30 matches and reranks them — exact issue
+number first, then dated before undated, then newest first. That works well for
+a specific series:
+
+- `absolute batman 22` → *Absolute Batman #22*, 2026-07-08, exact store date
+- `detective comics 1104` → exact match, 2025-12-24
+
+A bare `batman 14` is inherently ambiguous — dozens of series are named "Batman
+something" — and returns *Urban Legends*, *Batman/Superman* and the like. That
+is a limit of the source data, not the app. Include the series name and it is
+consistently accurate.
+
+Test the proxy with no key, no network and no quota used:
+
+```bash
+node functions/test-search.js
+```
+
+### Setup
+
+**1. Get a Comic Vine API key** — create a free account at
+[comicvine.gamespot.com](https://comicvine.gamespot.com/), then open
+[comicvine.gamespot.com/api/](https://comicvine.gamespot.com/api/) while signed
+in. Your key is shown on that page.
+
+**2. Create `functions/.env.search.yaml`** from `.env.search.yaml.example` and
+paste the key in. It's gitignored, and kept separate from `.env.yaml` so the
+search function never holds the Drive refresh token, and the daily job never
+holds the Comic Vine key.
+
+**3. Deploy:**
+
+```bash
+gcloud functions deploy comic-search --gen2 --runtime=nodejs22 --region=europe-west2 --source=./functions --entry-point=comicSearch --trigger-http --allow-unauthenticated --max-instances=3 --env-vars-file=functions/.env.search.yaml
+```
+
+**4. Get the URL and put it in `js/config.js` as `searchEndpoint`:**
+
+```bash
+gcloud functions describe comic-search --region=europe-west2 --format="value(serviceConfig.uri)"
+```
+
+Then commit and push, so GitHub Pages serves the updated config.
+
 ## Security notes
 
 - **Scope is `drive.appdata` only.** The app can reach its own hidden folder
@@ -327,5 +399,6 @@ Then open http://localhost:5173.
 3. ✅ Google Drive storage (`drive.appdata`)
 4. ✅ Push notifications (FCM, client side)
 5. ✅ Daily release check (Cloud Function + Cloud Scheduler)
-6. ⬜ Recommendations (Gemini, one-shot, via Cloud Function)
-7. ⬜ Polish, docs, end-to-end test
+6. ⬜ Comic search + autofill (Comic Vine, via Cloud Function)
+7. ⬜ Recommendations (Gemini, one-shot, via Cloud Function)
+8. ⬜ Polish, docs, end-to-end test

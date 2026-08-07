@@ -127,6 +127,14 @@ CubCave.drive = (function () {
     emit();
   }
 
+  /* The current token, or null. Deliberately does NOT trigger a sign-in:
+   * callers like live search run on every keystroke, and a popup attempt there
+   * would be blocked by the browser and pester the user. They should degrade
+   * to "sign in to use this" instead. */
+  function currentAccessToken() {
+    return isSignedIn() ? accessToken : null;
+  }
+
   function ensureToken() {
     if (isSignedIn()) return Promise.resolve(accessToken);
     return requestToken(false);
@@ -235,6 +243,7 @@ CubCave.drive = (function () {
     reauthorize: reauthorize,
     signOut: signOut,
     clearToken: clearToken,
+    currentAccessToken: currentAccessToken,
     onAuthChange: onAuthChange,
     read: read,
     write: write

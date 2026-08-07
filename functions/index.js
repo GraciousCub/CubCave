@@ -131,6 +131,226 @@ function buildMessage(dueEntries) {
   };
 }
 
+/* ==================================================================
+ * Comic search proxy (Phase 6)
+ *
+ * Comic Vine sends no CORS headers and requires an API key, so the browser
+ * cannot call it directly. This proxies the search and keeps the key here.
+ *
+ * Access control: the caller must present a Google access token issued to
+ * THIS app's OAuth client. Without that check the endpoint is a free, public
+ * comic-search API attached to your billing account and your Comic Vine quota.
+ * ================================================================== */
+
+const COMICVINE_KEY = process.env.COMICVINE_API_KEY;
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ||
+  'https://graciouscub.github.io,http://localhost:5173').split(',');
+const EXPECTED_AUDIENCE = process.env.GOOGLE_WEB_CLIENT_ID || '';
+
+const SEARCH_TIMEOUT_MS = 8000;
+const MAX_RESULTS = 8;
+
+/* Comic Vine's search has no date relevance: asking for 8 results for
+ * "batman 14" returns eight issues all titled "Batman #14" from runs going
+ * back decades, and the current one isn't among them. The volume stub in
+ * search results carries no start year, so those rows are indistinguishable.
+ *
+ * Fetching a wider set and sorting newest-first — for the same single upstream
+ * request — puts current and forthcoming issues at the top, which is what
+ * someone tracking releases is looking for. Undated records sink to the
+ * bottom: they can never drive a notification. */
+const UPSTREAM_LIMIT = 30;
+
+/* Two caches, both bounded. The search cache spares Comic Vine's 400-per-15-
+ * minutes limit while typing; the token cache spares Google a tokeninfo call
+ * on every keystroke. */
+const searchCache = new Map();
+const tokenCache = new Map();
+const SEARCH_TTL_MS = 10 * 60 * 1000;
+const TOKEN_TTL_MS = 5 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 200;
+
+function cacheGet(cache, key, ttl) {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > ttl) { cache.delete(key); return null; }
+  return hit.value;
+}
+
+function cacheSet(cache, key, value) {
+  // Crude bound: a long-lived instance must not grow without limit.
+  if (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value);
+  cache.set(key, { at: Date.now(), value });
+}
+
+async function verifyCaller(authHeader) {
+  const token = (authHeader || '').replace(/^Bearer\s+/i, '').trim();
+  if (!token) throw Object.assign(new Error('Missing access token'), { status: 401 });
+
+  const cached = cacheGet(tokenCache, token, TOKEN_TTL_MS);
+  if (cached) return cached;
+
+  const response = await fetch(
+    'https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token)
+  );
+  if (!response.ok) {
+    throw Object.assign(new Error('Invalid access token'), { status: 401 });
+  }
+  const info = await response.json();
+
+  // The token must have been issued to this app, not merely be a valid Google
+  // token from anywhere.
+  if (EXPECTED_AUDIENCE && info.aud !== EXPECTED_AUDIENCE) {
+    throw Object.assign(new Error('Token was not issued to this app'), { status: 403 });
+  }
+
+  cacheSet(tokenCache, token, info);
+  return info;
+}
+
+function normaliseDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value : null;
+}
+
+function mapIssue(issue) {
+  const seriesName = (issue.volume && issue.volume.name) || '';
+  const number = issue.issue_number ? `#${issue.issue_number}` : '';
+  return {
+    sourceId: issue.id,
+    // store_date is the day it reaches shops; cover_date is the printed month
+    // and is often weeks later. Prefer the real one.
+    releaseDate: normaliseDate(issue.store_date) || normaliseDate(issue.cover_date),
+    dateIsApproximate: !normaliseDate(issue.store_date),
+    title: [seriesName, number].filter(Boolean).join(' ') || (issue.name || 'Untitled'),
+    series: seriesName,
+    issueNumber: issue.issue_number || '',
+    storyTitle: issue.name || '',
+    coverUrl: (issue.image && (issue.image.thumb_url || issue.image.icon_url)) || ''
+  };
+}
+
+functions.http('comicSearch', async (req, res) => {
+  const origin = req.get('origin');
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+  }
+  res.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
+  res.set('Access-Control-Allow-Methods', 'GET,OPTIONS');
+
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+
+  const query = String(req.query.q || '').trim();
+
+  try {
+    if (!COMICVINE_KEY) {
+      throw Object.assign(new Error('Search is not configured'), { status: 503 });
+    }
+    if (query.length < 3) {
+      return res.status(200).json({ results: [], reason: 'query too short' });
+    }
+
+    await verifyCaller(req.get('authorization'));
+
+    const key = query.toLowerCase();
+    const cached = cacheGet(searchCache, key, SEARCH_TTL_MS);
+    if (cached) {
+      res.set('X-Cache', 'hit');
+      return res.status(200).json({ results: cached });
+    }
+
+    const url = 'https://comicvine.gamespot.com/api/search/?' + new URLSearchParams({
+      api_key: COMICVINE_KEY,
+      format: 'json',
+      resources: 'issue',
+      limit: String(UPSTREAM_LIMIT),
+      query,
+      field_list: 'id,name,issue_number,store_date,cover_date,volume,image'
+    });
+
+    // Bounded wait, and no retry: a failure surfaces rather than doubling load
+    // on an upstream that rate-limits hard.
+    const abort = AbortController ? new AbortController() : null;
+    const timer = abort ? setTimeout(() => abort.abort(), SEARCH_TIMEOUT_MS) : null;
+
+    let upstream;
+    try {
+      upstream = await fetch(url, {
+        signal: abort ? abort.signal : undefined,
+        headers: {
+          // Comic Vine rejects requests with no/!default User-Agent.
+          'User-Agent': 'CubCave-ComicTracker/1.0 (personal comic reading tracker)',
+          Accept: 'application/json'
+        }
+      });
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw Object.assign(
+          new Error('The comic database took too long to answer'), { status: 504 }
+        );
+      }
+      throw Object.assign(new Error('Could not reach the comic database'), { status: 502 });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
+    if (!upstream.ok) {
+      // Comic Vine signals throttling with 420 as well as the standard 429.
+      const throttled = upstream.status === 429 || upstream.status === 420;
+      throw Object.assign(
+        new Error(throttled
+          ? 'The comic database is rate limiting us — try again shortly'
+          : `Comic database returned ${upstream.status}`),
+        { status: throttled ? 429 : 502 }
+      );
+    }
+
+    const body = await upstream.json();
+    if (body.error && body.error !== 'OK') {
+      // It also reports throttling in the body with HTTP 200 (status_code 107).
+      const throttled = /rate limit/i.test(body.error) || body.status_code === 107;
+      throw Object.assign(
+        new Error(throttled
+          ? 'The comic database is rate limiting us — try again shortly'
+          : `Comic database: ${body.error}`),
+        { status: throttled ? 429 : 502 }
+      );
+    }
+
+    /* A trailing number in the query is almost always an issue number
+     * ("batman 14"), so matches on it rank first — otherwise a #69 whose story
+     * title happens to contain "14" outranks the issue actually asked for. */
+    const wantedNumber = (query.match(/(\d+)\s*$/) || [])[1] || null;
+
+    const results = (body.results || [])
+      .map(mapIssue)
+      // An entry with no date at all can't drive a release notification, but
+      // it's still a valid thing to track, so keep it and let the UI say so.
+      .filter((r) => r.title)
+      .sort((a, b) => {
+        if (wantedNumber) {
+          const aExact = a.issueNumber === wantedNumber ? 0 : 1;
+          const bExact = b.issueNumber === wantedNumber ? 0 : 1;
+          if (aExact !== bExact) return aExact - bExact;
+        }
+        // Then dated before undated, and newest first — forthcoming at the top.
+        if (!a.releaseDate && !b.releaseDate) return 0;
+        if (!a.releaseDate) return 1;
+        if (!b.releaseDate) return -1;
+        return b.releaseDate.localeCompare(a.releaseDate);
+      })
+      .slice(0, MAX_RESULTS);
+
+    cacheSet(searchCache, key, results);
+    res.set('X-Cache', 'miss');
+    return res.status(200).json({ results });
+  } catch (err) {
+    const status = err.status || 500;
+    if (status >= 500) console.error('Comic search failed:', err);
+    return res.status(status).json({ error: err.message, results: [] });
+  }
+});
+
 /* ---------- the function ---------- */
 
 functions.http('releaseCheck', async (req, res) => {

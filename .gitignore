@@ -3,13 +3,16 @@
 .env
 .env.*
 !.env.yaml.example
+!.env.search.yaml.example
 *.key
 service-account*.json
 secrets.json
 
-# The deploy-time config for the Cloud Function: contains the OAuth refresh
-# token, which grants ongoing access to the Drive app folder.
+# Deploy-time config for the Cloud Functions. .env.yaml holds the OAuth refresh
+# token (ongoing access to the Drive app folder); .env.search.yaml holds the
+# Comic Vine API key. Kept apart so each function gets only what it needs.
 functions/.env.yaml
+functions/.env.search.yaml
 
 # Node (used by tools/ and, later, the Cloud Function)
 node_modules/
