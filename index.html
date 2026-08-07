@@ -118,7 +118,9 @@
       </div>
     </div>
     <div class="series-head__actions">
+      <button class="btn" type="button" id="series-follow-btn">Follow</button>
       <button class="btn" type="button" id="series-read-all-btn">Mark released issues read</button>
+      <button class="btn btn--danger" type="button" id="series-delete-btn">Delete series</button>
     </div>
     <div class="issue-grid" id="series-issues"></div>
   </section>
@@ -140,11 +142,14 @@
 
     <label class="field">
       <span class="field__label">Title</span>
-      <input class="field__input" type="text" id="f-title" name="title"
-             placeholder="Batman #14" required maxlength="120"
-             autocomplete="off" autocapitalize="words" spellcheck="false"
-             enterkeyhint="next" role="combobox" aria-expanded="false"
-             aria-autocomplete="list" aria-controls="title-suggest">
+      <div class="field__row">
+        <input class="field__input" type="text" id="f-title" name="title"
+               placeholder="Batman #14" required maxlength="120"
+               autocomplete="off" autocapitalize="words" spellcheck="false"
+               enterkeyhint="next" role="combobox" aria-expanded="false"
+               aria-autocomplete="list" aria-controls="title-suggest">
+        <div class="source-toggle" id="title-source" role="group" aria-label="Comic database"></div>
+      </div>
     </label>
 
     <!-- Live results from the comic database; fills the fields when picked. -->
@@ -204,8 +209,11 @@
 
     <label class="field">
       <span class="field__label">Series name</span>
-      <input class="field__input" type="text" id="f-series-search"
-             placeholder="Batman" autocomplete="off" spellcheck="false">
+      <div class="field__row">
+        <input class="field__input" type="text" id="f-series-search"
+               placeholder="Batman" autocomplete="off" spellcheck="false">
+        <div class="source-toggle" id="series-source" role="group" aria-label="Comic database"></div>
+      </div>
     </label>
 
     <div class="suggest" id="series-suggest" role="listbox" aria-label="Matching series" hidden></div>

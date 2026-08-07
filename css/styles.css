@@ -301,10 +301,99 @@ button.tile:active,
 }
 
 .tile__actions .entry__btn {
-  flex: 1;
+  /* Wrap the whole button onto its own line rather than breaking its label
+     across two lines inside a narrow tile. */
+  flex: 1 1 auto;
   min-height: 30px;
   padding: 0 8px;
   font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ---------- drag to reorder ---------- */
+
+/* Only while a drag is in progress, so the list scrolls normally otherwise. */
+.series-grid.is-reordering {
+  touch-action: none;
+}
+
+.tile.is-dragging {
+  opacity: 0.75;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+}
+
+/* Stops a long press selecting the tile's text or raising the iOS callout. */
+.tile--series {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* ---------- source toggle ---------- */
+
+.field__row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.field__row .field__input { flex: 1; min-width: 0; }
+
+.source-toggle {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.source-toggle__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.source-toggle__btn img {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  /* Both favicons are light-on-dark logos; dim the inactive ones. */
+  opacity: 0.5;
+}
+
+.source-toggle__btn.is-active {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.source-toggle__btn.is-active img { opacity: 1; }
+
+.suggest__more {
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: var(--bg-hover);
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn--on {
+  border-color: var(--green);
+  color: var(--green);
 }
 
 /* ---------- series detail ---------- */
@@ -339,11 +428,14 @@ button.tile:active,
 }
 
 .series-head__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 14px;
 }
 
 .series-head__actions .btn {
-  width: 100%;
+  flex: 1 1 160px;
   min-height: 36px;
   font-size: 14px;
 }

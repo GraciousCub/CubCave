@@ -130,7 +130,8 @@ CubCave.search = (function () {
     handlers = handlers || {};
     options = options || {};
     var query = String(text || '').trim();
-    var key = (options.type || 'issue') + '|' + normalise(query);
+    var key = (options.type || 'issue') + '|' + (options.source || 'auto') +
+              '|' + normalise(query);
 
     cancel();
 
@@ -156,7 +157,8 @@ CubCave.search = (function () {
     if (handlers.onState) handlers.onState('searching');
 
     timer = setTimeout(function () {
-      fetchResults(query, { type: options.type }).then(function (results) {
+      fetchResults(query, { type: options.type, source: options.source })
+        .then(function (results) {
         remember(key, results);
         // Ignore a response that arrived after the user moved on. Which box
         // "current" refers to depends on the caller, so it can supply its own.
@@ -179,20 +181,22 @@ CubCave.search = (function () {
   /* Issues in a followed series that haven't been released yet. Used the
    * moment you follow something, so you see straight away what it brought in
    * rather than waiting for tomorrow's scheduled check. */
-  function upcomingForSeries(seriesId) {
-    return issuesForSeries(seriesId, false);
+  function upcomingForSeries(seriesId, source) {
+    return issuesForSeries(seriesId, false, source);
   }
 
   // The whole run, for importing a series.
-  function allIssuesForSeries(seriesId) {
-    return issuesForSeries(seriesId, true);
+  function allIssuesForSeries(seriesId, source) {
+    return issuesForSeries(seriesId, true, source);
   }
 
-  function issuesForSeries(seriesId, all) {
+  function issuesForSeries(seriesId, all, source) {
     var token = CubCave.drive.currentAccessToken();
     if (!token) return Promise.reject(new Error('Sign in first.'));
 
-    return fetch(endpointUrl({ seriesId: seriesId, all: all ? '1' : '' }), {
+    return fetch(endpointUrl({
+      seriesId: seriesId, all: all ? '1' : '', source: source || ''
+    }), {
       headers: { Authorization: 'Bearer ' + token }
     }).then(function (response) {
       return response.json().catch(function () { return {}; })
@@ -210,10 +214,10 @@ CubCave.search = (function () {
     onInput: onInput,
     upcomingForSeries: upcomingForSeries,
     allIssuesForSeries: allIssuesForSeries,
-    seriesByName: function (name) {
+    seriesByName: function (name, source) {
       var token = CubCave.drive.currentAccessToken();
       if (!token) return Promise.reject(new Error('Sign in first.'));
-      return fetch(endpointUrl({ q: name, type: 'series' }), {
+      return fetch(endpointUrl({ q: name, type: 'series', source: source || '' }), {
         headers: { Authorization: 'Bearer ' + token }
       }).then(function (r) {
         return r.json().then(function (b) {

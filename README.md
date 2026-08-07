@@ -376,6 +376,34 @@ Issues are grouped into their series and shown as cover art.
   button, and it deliberately **skips issues dated in the future** — you can't
   have read something that isn't out, and marking them would hide them from the
   release notifications they exist for.
+- **Delete series** removes every issue of it and unfollows. Also two-step, and
+  it names the number of issues before you confirm. There is no undo.
+
+### Ordering
+
+Series tiles can be **dragged into any order, on every tab**, and that order is
+shared across all of them — a series you consider urgent is urgent wherever it
+appears. Series you haven't arranged fall in afterwards, in whatever order the
+list naturally produced (soonest release, most recently finished).
+
+**On touch, press and hold for about a third of a second to pick a tile up.**
+A swipe scrolls, a tap opens the series, a hold starts a drag. With a mouse,
+just drag. Dragging one series leaves every other series exactly where it was.
+
+### Choosing the database
+
+The icons beside the search box pick which database to search:
+
+- **Auto** (default) — Metron, falling back to Comic Vine when it comes back thin
+- **Metron only** — the source that knows about unreleased issues
+- **Comic Vine only** — deeper back catalogue
+
+The choice is remembered, applies to both series and issue search, and with a
+source pinned there is **no silent fallback**, so results genuinely come from
+where the toggle says. The icons are the sites' own favicons, hotlinked, and
+fall back to a monogram if they don't load.
+
+Results are shown 8 at a time behind a **More** button.
 
 Entries with no series are grouped under **Other**.
 
@@ -399,7 +427,10 @@ and picking one:
 - imports **every issue of that run**, with cover art
 - marks issues **not yet released** as Upcoming automatically
 - puts the rest in your queue to mark as you read them
-- **follows** the series, so future issues keep arriving on their own
+
+**Adding does not follow.** Following is a separate decision, made with the
+**Follow** button in the series view — adding a finished run shouldn't sign you
+up for notifications about it.
 
 Adding the same series again is safe: issues already tracked are skipped and it
 reports how many were.

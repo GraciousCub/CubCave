@@ -44,6 +44,10 @@ CubCave.store = (function () {
        * which is how an issue that isn't in the database yet still reaches
        * you when it appears. */
       subscriptions: [],
+      /* Your hand-arranged order of series, by name. One global order used on
+       * every list — a series you consider urgent is urgent wherever it
+       * appears. Series not in here fall in after the ones that are. */
+      seriesOrder: [],
       updatedAt: null,
       schemaVersion: SCHEMA_VERSION
     };
@@ -111,7 +115,11 @@ CubCave.store = (function () {
           // sort numerically rather than as text ("#9" before "#10").
           coverUrl: typeof e.coverUrl === 'string' ? e.coverUrl : '',
           issueNumber: typeof e.issueNumber === 'string' ? e.issueNumber
-                     : (typeof e.issueNumber === 'number' ? String(e.issueNumber) : '')
+                     : (typeof e.issueNumber === 'number' ? String(e.issueNumber) : ''),
+          // The database's id for the SERIES, kept so the series can be
+          // followed later without having to search for it again.
+          seriesId: e.seriesId != null ? String(e.seriesId) : '',
+          seriesSource: typeof e.seriesSource === 'string' ? e.seriesSource : ''
         };
       });
 
@@ -142,6 +150,12 @@ CubCave.store = (function () {
             lastCheckedAt: typeof s.lastCheckedAt === 'string' ? s.lastCheckedAt : null
           };
         });
+    }
+
+    if (Array.isArray(parsed.seriesOrder)) {
+      clean.seriesOrder = parsed.seriesOrder.filter(function (n) {
+        return typeof n === 'string' && n;
+      });
     }
 
     if (typeof parsed.updatedAt === 'string') clean.updatedAt = parsed.updatedAt;
@@ -206,6 +220,7 @@ CubCave.store = (function () {
       entries: data.entries.slice(),
       pushSubscriptions: data.pushSubscriptions.slice(),
       subscriptions: data.subscriptions.slice(),
+      seriesOrder: data.seriesOrder.slice(),
       // A file created before any edit has no updatedAt yet; stamp it now so
       // the document on Drive always carries a real timestamp.
       updatedAt: data.updatedAt || nowISO(),
@@ -324,7 +339,9 @@ CubCave.store = (function () {
         sortOrder: order,
         sourceId: typeof fields.sourceId === 'string' ? fields.sourceId : null,
         coverUrl: typeof fields.coverUrl === 'string' ? fields.coverUrl : '',
-        issueNumber: fields.issueNumber != null ? String(fields.issueNumber) : ''
+        issueNumber: fields.issueNumber != null ? String(fields.issueNumber) : '',
+        seriesId: fields.seriesId != null ? String(fields.seriesId) : '',
+        seriesSource: typeof fields.seriesSource === 'string' ? fields.seriesSource : ''
       };
       if (entry.status === 'read') entry.dateRead = nowISO();
 
@@ -433,41 +450,41 @@ CubCave.store = (function () {
     return isNaN(value) ? Infinity : value;
   }
 
-  /* The queue is ordered by series, since issues within a run are read in
-   * number order anyway. Moving a series renumbers every queued entry so the
-   * ordering stays a simple ascending sequence rather than a sparse mess. */
-  function queueSeriesOrder() {
-    var lowest = {};
-    var order = [];
-    data.entries.forEach(function (entry) {
-      if (entry.status !== 'next') return;
-      var key = seriesKey(entry);
-      if (!(key in lowest)) { lowest[key] = entry.sortOrder; order.push(key); }
-      else lowest[key] = Math.min(lowest[key], entry.sortOrder);
-    });
-    return order.sort(function (a, b) { return lowest[a] - lowest[b]; });
+  function getSeriesOrder() {
+    return data.seriesOrder.slice();
   }
 
-  function moveSeriesInQueue(seriesName, direction) {
-    var order = queueSeriesOrder();
-    var index = order.indexOf(seriesName);
-    if (index === -1) return false;
-
-    var target = index + (direction === 'up' ? -1 : 1);
-    if (target < 0 || target >= order.length) return false;
-
-    var swap = order[index];
-    order[index] = order[target];
-    order[target] = swap;
-
-    var position = 0;
-    order.forEach(function (key) {
-      data.entries
-        .filter(function (e) { return e.status === 'next' && seriesKey(e) === key; })
-        .sort(function (a, b) { return issueNumberOf(a) - issueNumberOf(b); })
-        .forEach(function (entry) { entry.sortOrder = position++; });
+  /* Every series currently tracked, in your arranged order — arranged ones
+   * first in their order, then the rest as they naturally fall. */
+  function allSeriesOrdered() {
+    var seen = {};
+    var natural = [];
+    data.entries.forEach(function (entry) {
+      var key = seriesKey(entry);
+      if (!seen[key]) { seen[key] = true; natural.push(key); }
     });
 
+    var ordered = data.seriesOrder.filter(function (name) { return seen[name]; });
+    natural.forEach(function (name) {
+      if (ordered.indexOf(name) === -1) ordered.push(name);
+    });
+    return ordered;
+  }
+
+  /* Move one series to sit where another currently is, leaving every other
+   * series exactly where it was. Reordering on one list therefore doesn't
+   * scramble the order seen on the others. */
+  function moveSeriesBefore(name, targetName) {
+    var order = allSeriesOrdered();
+    var from = order.indexOf(name);
+    if (from === -1) return false;
+
+    order.splice(from, 1);
+    var to = targetName == null ? order.length : order.indexOf(targetName);
+    if (to === -1) to = order.length;
+    order.splice(to, 0, name);
+
+    data.seriesOrder = order;
     changed();
     return true;
   }
@@ -614,8 +631,9 @@ CubCave.store = (function () {
     markSeriesRead: markSeriesRead,
     remove: remove,
     moveInQueue: moveInQueue,
-    moveSeriesInQueue: moveSeriesInQueue,
-    queueSeriesOrder: queueSeriesOrder,
+    getSeriesOrder: getSeriesOrder,
+    allSeriesOrdered: allSeriesOrdered,
+    moveSeriesBefore: moveSeriesBefore,
     removeSeries: removeSeries,
     getSubscriptions: getSubscriptions,
     isSubscribed: isSubscribed,

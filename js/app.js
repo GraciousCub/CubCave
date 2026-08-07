@@ -138,15 +138,34 @@ function groupBySeries(entries) {
     if (!groups[key]) { groups[key] = []; order.push(key); }
     groups[key].push(entry);
   });
-  return { groups: groups, order: order.sort() };
+  /* Your arranged order wins where you've set one; anything you haven't
+   * arranged keeps the order the list naturally produced (soonest release,
+   * most recently finished, and so on). Array.sort is stable, so those keep
+   * their relative positions. */
+  var manual = store.getSeriesOrder();
+  order.sort(function (a, b) {
+    var ia = manual.indexOf(a);
+    var ib = manual.indexOf(b);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+
+  return { groups: groups, order: order };
 }
 
 /* ---------- cover art ---------- */
 
 function initialsOf(name) {
   return String(name || '?')
+    // Drop the "(2025)" the series label carries, then anything that isn't a
+    // word — otherwise "Batman (2025)" initialises to "B(".
+    .replace(/\(\d{4}\)/g, ' ')
     .replace(/^(the|a)\s+/i, '')
-    .split(/\s+/).slice(0, 2)
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean)
+    .slice(0, 2)
     .map(function (word) { return word.charAt(0); })
     .join('').toUpperCase() || '?';
 }
@@ -194,25 +213,152 @@ function statusBadge(entry) {
   return { text: 'Queued', tone: '' };
 }
 
-function createSeriesTile(name, inThisList, allIssues) {
-  var tile = el('button', 'tile tile--series');
-  tile.type = 'button';
-  tile.setAttribute('aria-label', 'Open ' + name);
+function createSeriesTile(name, inThisList, allIssues, queuePosition) {
+  var tile = el('div', 'tile tile--series');
+
+  var open = el('button', 'tile__open');
+  open.type = 'button';
+  open.setAttribute('aria-label', 'Open ' + name);
 
   var art = artElement(coverForSeries(allIssues), name);
 
   // How many of this series are in the list you're looking at.
   art.appendChild(el('span', 'tile__count', String(inThisList.length)));
-  tile.appendChild(art);
+  open.appendChild(art);
 
   var label = el('div', 'tile__label');
   label.appendChild(el('div', 'tile__title', name));
   label.appendChild(el('div', 'tile__meta',
     allIssues.length + (allIssues.length === 1 ? ' issue tracked' : ' issues tracked')));
-  tile.appendChild(label);
+  open.appendChild(label);
 
-  tile.addEventListener('click', function () { openSeriesView(name); });
+  open.addEventListener('click', function () { openSeriesView(name); });
+  tile.appendChild(open);
+
+  // Read by the drag handler to know what it's moving.
+  tile.dataset.series = name;
   return tile;
+}
+
+/* ---------- drag to reorder ----------
+ *
+ * Series tiles can be rearranged on any list, and the order is shared across
+ * all of them.
+ *
+ * Touch needs care: a tile is also a button, and the list scrolls. So a drag
+ * starts only after a press is HELD (350ms) without moving — a swipe scrolls
+ * as normal, a tap opens the series, and a hold picks it up. With a mouse,
+ * moving past a few pixels is enough, since there's nothing to scroll past.
+ *
+ * The dragged tile is moved in the DOM as you go, so the grid reflows and you
+ * can see where it will land.
+ */
+
+var HOLD_MS = 350;
+var MOVE_TOLERANCE = 10;
+
+function enableSeriesDrag(grid) {
+  var candidate = null;
+  var dragging = null;
+  var holdTimer = null;
+  var startX = 0;
+  var startY = 0;
+  var suppressClick = false;
+
+  function cancelHold() {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    candidate = null;
+  }
+
+  function beginDrag(tile, pointerId) {
+    dragging = tile;
+    candidate = null;
+    tile.classList.add('is-dragging');
+    grid.classList.add('is-reordering');
+    try { tile.setPointerCapture(pointerId); } catch (err) { /* not fatal */ }
+    if (navigator.vibrate) navigator.vibrate(15);
+  }
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging.classList.remove('is-dragging');
+    grid.classList.remove('is-reordering');
+
+    // Persist whatever order the DOM now shows.
+    var names = Array.prototype.map.call(
+      grid.querySelectorAll('.tile--series'), function (t) { return t.dataset.series; });
+    var moved = dragging.dataset.series;
+    var index = names.indexOf(moved);
+    var before = index + 1 < names.length ? names[index + 1] : null;
+
+    dragging = null;
+    store.moveSeriesBefore(moved, before);
+  }
+
+  grid.addEventListener('pointerdown', function (event) {
+    if (event.button != null && event.button !== 0) return;
+    var tile = event.target.closest('.tile--series');
+    if (!tile || grid.querySelectorAll('.tile--series').length < 2) return;
+
+    candidate = tile;
+    startX = event.clientX;
+    startY = event.clientY;
+    suppressClick = false;
+
+    if (event.pointerType === 'touch') {
+      holdTimer = setTimeout(function () {
+        if (candidate) beginDrag(candidate, event.pointerId);
+      }, HOLD_MS);
+    }
+  });
+
+  grid.addEventListener('pointermove', function (event) {
+    if (!dragging) {
+      if (!candidate) return;
+      var dx = Math.abs(event.clientX - startX);
+      var dy = Math.abs(event.clientY - startY);
+
+      if (event.pointerType === 'touch') {
+        // Movement before the hold completes means they're scrolling.
+        if (dx > MOVE_TOLERANCE || dy > MOVE_TOLERANCE) cancelHold();
+        return;
+      }
+      if (dx > 6 || dy > 6) beginDrag(candidate, event.pointerId);
+      return;
+    }
+
+    event.preventDefault();
+    suppressClick = true;
+
+    var under = document.elementFromPoint(event.clientX, event.clientY);
+    var target = under && under.closest ? under.closest('.tile--series') : null;
+    if (!target || target === dragging || target.parentNode !== grid) return;
+
+    // Insert before or after depending on which half was entered.
+    var box = target.getBoundingClientRect();
+    var after = (event.clientX - box.left) > box.width / 2;
+    grid.insertBefore(dragging, after ? target.nextSibling : target);
+  });
+
+  function finish(event) {
+    cancelHold();
+    if (dragging) {
+      if (event) event.preventDefault();
+      endDrag();
+    }
+  }
+
+  grid.addEventListener('pointerup', finish);
+  grid.addEventListener('pointercancel', finish);
+
+  // A drag ends over a tile, which would otherwise open that series.
+  grid.addEventListener('click', function (event) {
+    if (!suppressClick) return;
+    suppressClick = false;
+    event.stopPropagation();
+    event.preventDefault();
+  }, true);
 }
 
 function createIssueTile(entry) {
@@ -223,7 +369,9 @@ function createIssueTile(entry) {
   open.type = 'button';
   open.setAttribute('aria-label', 'Edit ' + entry.title);
 
-  var art = artElement(entry.coverUrl, entry.title);
+  // Fall back to the SERIES initials, not the title's — "Batman #10" would
+  // otherwise initialise to "B1".
+  var art = artElement(entry.coverUrl, entry.series || entry.title);
   var badge = statusBadge(entry);
   art.appendChild(el('span', 'tile__badge' + (badge.tone ? ' tile__badge--' + badge.tone : ''),
                      badge.text));
@@ -267,10 +415,54 @@ var seriesViewTitle = document.getElementById('series-view-title');
 var seriesViewMeta = document.getElementById('series-view-meta');
 var seriesIssues = document.getElementById('series-issues');
 var seriesReadAllBtn = document.getElementById('series-read-all-btn');
+var seriesDeleteBtn = document.getElementById('series-delete-btn');
+var seriesFollowBtn = document.getElementById('series-follow-btn');
+
+// The database's id for a series, taken from any issue that was imported.
+function seriesIdentity(name) {
+  var withId = entriesInSeries(name).filter(function (e) { return e.seriesId; })[0];
+  return withId ? { seriesId: withId.seriesId, source: withId.seriesSource || 'metron' } : null;
+}
+
+function renderFollowButton() {
+  var identity = seriesIdentity(openSeries);
+  var following = store.getSubscriptions().some(function (s) {
+    return s.seriesName === openSeries ||
+           (identity && s.seriesId === identity.seriesId);
+  });
+
+  // Nothing to follow if the series was never matched to a database entry.
+  seriesFollowBtn.hidden = !identity && !following;
+  seriesFollowBtn.textContent = following ? 'Following ✓' : 'Follow';
+  seriesFollowBtn.classList.toggle('btn--on', following);
+  seriesFollowBtn.dataset.following = following ? '1' : '';
+}
+
+seriesFollowBtn.addEventListener('click', function () {
+  if (!openSeries) return;
+
+  if (seriesFollowBtn.dataset.following) {
+    store.getSubscriptions().forEach(function (sub) {
+      if (sub.seriesName === openSeries) store.removeSubscription(sub.id);
+    });
+    toast('Stopped following ' + openSeries + '.');
+    return;
+  }
+
+  var identity = seriesIdentity(openSeries);
+  if (!identity) return;
+  store.addSubscription({
+    source: identity.source,
+    seriesId: identity.seriesId,
+    seriesName: openSeries
+  });
+  toast('Following ' + openSeries + ' — new issues will be added automatically.');
+});
 
 function openSeriesView(name) {
   openSeries = name;
   disarmReadAll();
+  disarmDeleteSeries();
   render();
   document.querySelector('.content').scrollTop = 0;
 }
@@ -278,6 +470,7 @@ function openSeriesView(name) {
 function closeSeriesView() {
   openSeries = null;
   disarmReadAll();
+  disarmDeleteSeries();
   render();
 }
 
@@ -300,6 +493,12 @@ function renderLibrary() {
     grouped.order.forEach(function (name) {
       grid.appendChild(createSeriesTile(name, grouped.groups[name], entriesInSeries(name)));
     });
+
+    // Once per grid, not once per render.
+    if (!grid.dataset.dragReady) {
+      grid.dataset.dragReady = '1';
+      enableSeriesDrag(grid);
+    }
 
     var empty = document.querySelector('[data-empty="' + status + '"]');
     if (empty) empty.hidden = entries.length > 0;
@@ -339,6 +538,8 @@ function renderSeriesView() {
   });
   seriesReadAllBtn.hidden = !markable.length;
   seriesReadAllBtn.dataset.count = String(markable.length);
+
+  renderFollowButton();
 }
 
 function render() {
@@ -378,6 +579,45 @@ seriesReadAllBtn.addEventListener('click', function () {
   disarmReadAll();
   var marked = store.markSeriesRead(openSeries, todayISO());
   toast('Marked ' + marked + (marked === 1 ? ' issue' : ' issues') + ' read.');
+});
+
+/* Deleting a series takes every issue of it with it, and unfollows. Two-step
+ * for the same reason Delete is: this is the most destructive button in the
+ * app and there's no undo. */
+
+var deleteSeriesArmed = false;
+var deleteSeriesTimer = null;
+
+function disarmDeleteSeries() {
+  deleteSeriesArmed = false;
+  clearTimeout(deleteSeriesTimer);
+  seriesDeleteBtn.textContent = 'Delete series';
+  seriesDeleteBtn.classList.remove('btn--armed');
+}
+
+seriesDeleteBtn.addEventListener('click', function () {
+  if (!openSeries) return;
+
+  var count = entriesInSeries(openSeries).length;
+
+  if (!deleteSeriesArmed) {
+    deleteSeriesArmed = true;
+    seriesDeleteBtn.textContent = 'Tap again: delete ' + count +
+      (count === 1 ? ' issue' : ' issues');
+    seriesDeleteBtn.classList.add('btn--armed');
+    deleteSeriesTimer = setTimeout(disarmDeleteSeries, 5000);
+    return;
+  }
+
+  var name = openSeries;
+  disarmDeleteSeries();
+  var removed = store.removeSeries(name);
+
+  // removeSeries fires a change, which re-renders and — finding the series
+  // empty — drops back to the grid on its own.
+  toast('Deleted ' + name + ' (' + removed.issues +
+        (removed.issues === 1 ? ' issue' : ' issues') +
+        (removed.unfollowed ? ', unfollowed' : '') + ').');
 });
 
 document.getElementById('series-back-btn').addEventListener('click', closeSeriesView);
@@ -456,6 +696,71 @@ var editingId = null;
  * because the form has no fields for them — they aren't things to type. */
 var pendingFromSearch = null;
 
+/* ---------- which database to search ---------- */
+
+/* Metron knows about issues that haven't come out; Comic Vine has the deeper
+ * back catalogue. Left unset, the server tries Metron and falls back — the
+ * toggle pins it to one so you can tell where a result came from. */
+var SOURCES = [
+  { id: '', label: 'Auto', title: 'Metron, falling back to Comic Vine', icon: null },
+  { id: 'metron', label: 'M', title: 'Metron only', icon: 'https://metron.cloud/favicon.ico' },
+  { id: 'comicvine', label: 'CV', title: 'Comic Vine only',
+    icon: 'https://comicvine.gamespot.com/favicon.ico' }
+];
+
+var activeSource = '';
+try {
+  activeSource = localStorage.getItem('cubcave.source') || '';
+} catch (err) { /* ignore */ }
+
+var sourceListeners = [];
+
+function setSource(id) {
+  activeSource = id;
+  try { localStorage.setItem('cubcave.source', id); } catch (err) { /* ignore */ }
+  sourceListeners.forEach(function (fn) { fn(id); });
+}
+
+function buildSourceToggle(container, onChange) {
+  function paint() {
+    container.textContent = '';
+    SOURCES.forEach(function (source) {
+      var button = el('button', 'source-toggle__btn' +
+        (activeSource === source.id ? ' is-active' : ''));
+      button.type = 'button';
+      button.title = source.title;
+      button.setAttribute('aria-label', source.title);
+      button.setAttribute('aria-pressed', String(activeSource === source.id));
+
+      if (source.icon) {
+        var img = document.createElement('img');
+        img.alt = '';
+        img.referrerPolicy = 'no-referrer';
+        // Their favicons are hotlinked; fall back to a monogram if blocked
+        // or offline.
+        img.addEventListener('error', function () {
+          img.remove();
+          button.appendChild(el('span', 'source-toggle__text', source.label));
+        });
+        img.src = source.icon;
+        button.appendChild(img);
+      } else {
+        button.appendChild(el('span', 'source-toggle__text', source.label));
+      }
+
+      button.addEventListener('click', function () {
+        setSource(source.id);
+        if (onChange) onChange();
+      });
+
+      container.appendChild(button);
+    });
+  }
+
+  sourceListeners.push(paint);
+  paint();
+}
+
 /* ---------- live comic search ---------- */
 
 var suggestBox = document.getElementById('title-suggest');
@@ -482,16 +787,25 @@ function setSuggestStatus(text) {
   suggestStatus.hidden = !text;
 }
 
+var issueResults = [];
+var issueShown = PAGE_SIZE;
+
 function renderSuggestions(results) {
+  issueResults = results || [];
+  issueShown = PAGE_SIZE;
+  repaintSuggestions();
+}
+
+function repaintSuggestions() {
   suggestBox.textContent = '';
 
-  if (!results.length) {
+  if (!issueResults.length) {
     hideSuggestions();
     setSuggestStatus('No matches — type the title yourself.');
     return;
   }
 
-  results.forEach(function (item) {
+  issueResults.slice(0, issueShown).forEach(function (item) {
     var row = el('button', 'suggest__item');
     row.type = 'button';
     row.setAttribute('role', 'option');
@@ -510,14 +824,16 @@ function renderSuggestions(results) {
     }
     row.appendChild(el('span', 'suggest__meta', bits.join(' · ')));
 
-    // pointerdown, not click: the field's blur would otherwise tear this
-    // element down before a click could land on it.
-    row.addEventListener('pointerdown', function (event) {
-      event.preventDefault();
-      applySuggestion(item);
-    });
+    /* click, not pointerdown: pointerdown fires as soon as a finger lands, so
+     * scrolling the list selected whichever result the swipe started on. */
+    row.addEventListener('click', function () { applySuggestion(item); });
 
     suggestBox.appendChild(row);
+  });
+
+  appendMoreButton(suggestBox, issueResults.length, issueShown, function () {
+    issueShown += PAGE_SIZE;
+    repaintSuggestions();
   });
 
   suggestBox.hidden = false;
@@ -553,6 +869,11 @@ function applySuggestion(item) {
   setSuggestStatus(note);
 }
 
+buildSourceToggle(document.getElementById('title-source'), function () {
+  // Re-run the current query against the newly chosen database.
+  if (fTitle.value.trim()) fTitle.dispatchEvent(new Event('input'));
+});
+
 fTitle.addEventListener('input', function () {
   CubCave.search.onInput(fTitle.value, {
     onState: function (state) {
@@ -564,7 +885,7 @@ fTitle.addEventListener('input', function () {
       hideSuggestions();
       setSuggestStatus(message);
     }
-  });
+  }, { source: activeSource });
 });
 
 fTitle.addEventListener('keydown', function (event) {
@@ -770,55 +1091,77 @@ function setSeriesStatus(text) {
   seriesStatus.hidden = !text;
 }
 
+var PAGE_SIZE = 8;
+var seriesResults = [];
+var seriesShown = PAGE_SIZE;
+
 function renderSeriesResults(results) {
+  seriesResults = results || [];
+  seriesShown = PAGE_SIZE;
+  repaintSeriesResults();
+}
+
+/* Separate from the above on purpose: the search layer calls onResults with
+ * (results, query), so a second positional "keep the page" argument would
+ * silently receive the query string. */
+function repaintSeriesResults() {
   seriesSuggest.textContent = '';
 
-  if (!results.length) {
+  if (!seriesResults.length) {
     seriesSuggest.hidden = true;
     setSeriesStatus('No series found.');
     return;
   }
 
-  results.slice(0, 20).forEach(function (item) {
+  seriesResults.slice(0, seriesShown).forEach(function (item) {
     var row = el('button', 'suggest__item');
     row.type = 'button';
     row.setAttribute('role', 'option');
     row.appendChild(el('span', 'suggest__title', item.seriesName));
-
-    var already = store.isSubscribed(item.seriesId);
     row.appendChild(el('span', 'suggest__meta',
-      already ? 'Already following' : item.issueCount + ' issues on record'));
-    row.disabled = already;
+      item.issueCount + (item.issueCount === 1 ? ' issue on record' : ' issues on record')));
 
-    row.addEventListener('pointerdown', function (event) {
-      event.preventDefault();
-      followSeries(item);
-    });
+    /* click, not pointerdown: pointerdown fires the moment a finger touches
+     * the screen, so scrolling the list picked whichever result you happened
+     * to start the swipe on. */
+    row.addEventListener('click', function () { followSeries(item); });
 
     seriesSuggest.appendChild(row);
+  });
+
+  appendMoreButton(seriesSuggest, seriesResults.length, seriesShown, function () {
+    seriesShown += PAGE_SIZE;
+    repaintSeriesResults();
   });
 
   seriesSuggest.hidden = false;
   setSeriesStatus('');
 }
 
+function appendMoreButton(container, total, shown, onMore) {
+  if (shown >= total) return;
+  var remaining = total - shown;
+  var more = el('button', 'suggest__more',
+    'More (' + remaining + ' left)');
+  more.type = 'button';
+  more.addEventListener('click', function (event) {
+    event.stopPropagation();
+    onMore();
+  });
+  container.appendChild(more);
+}
+
 /* Adding a series brings in its whole run and follows it, so future issues
  * keep arriving. Issues not yet released are marked Upcoming automatically;
  * everything else lands in the queue for you to mark as you go. */
+/* Importing does NOT follow the series. Following is its own decision, made
+ * from the series view — adding a finished run shouldn't sign you up for
+ * notifications about it. */
 function followSeries(item) {
-  var alreadyFollowed = store.isSubscribed(item.seriesId);
-  if (!alreadyFollowed) {
-    store.addSubscription({
-      source: item.source,
-      seriesId: item.seriesId,
-      seriesName: item.seriesName
-    });
-  }
-
   seriesSuggest.hidden = true;
   setSeriesStatus('Adding ' + item.seriesName + ' — fetching issues…');
 
-  CubCave.search.allIssuesForSeries(item.seriesId).then(function (issues) {
+  CubCave.search.allIssuesForSeries(item.seriesId, item.source).then(function (issues) {
     var today = todayISO();
     var batch = [];
     var skipped = 0;
@@ -836,7 +1179,10 @@ function followSeries(item) {
         notes: '',
         sourceId: sourceId,
         coverUrl: issue.coverUrl || '',
-        issueNumber: issue.issueNumber || ''
+        issueNumber: issue.issueNumber || '',
+        // Remembered so the series can be followed later without searching.
+        seriesId: item.seriesId,
+        seriesSource: item.source
       });
     });
 
@@ -988,8 +1334,13 @@ seriesInput.addEventListener('input', function () {
     }
   }, {
     type: 'series',
+    source: activeSource,
     currentText: function () { return seriesInput.value; }
   });
+});
+
+buildSourceToggle(document.getElementById('series-source'), function () {
+  if (seriesInput.value.trim()) seriesInput.dispatchEvent(new Event('input'));
 });
 
 /* ---------- notifications ---------- */

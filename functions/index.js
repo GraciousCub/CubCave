@@ -225,7 +225,9 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ||
 const EXPECTED_AUDIENCE = process.env.GOOGLE_WEB_CLIENT_ID || '';
 
 const SEARCH_TIMEOUT_MS = 8000;
-const MAX_RESULTS = 20;
+// The client shows a page at a time behind a "More" button, so returning a
+// deeper set costs nothing extra upstream.
+const MAX_RESULTS = 40;
 
 /* Comic Vine's search has no date relevance: asking for 8 results for
  * "batman 14" returns eight issues all titled "Batman #14" from runs going
@@ -527,6 +529,60 @@ async function searchMetronSeries(query) {
   }));
 }
 
+/* Comic Vine calls a series a "volume". Searching them lets the source toggle
+ * work for series as well as issues, rather than being Metron-only. */
+async function searchComicVineSeries(query) {
+  if (!COMICVINE_KEY) return [];
+
+  const url = 'https://comicvine.gamespot.com/api/search/?' + new URLSearchParams({
+    api_key: COMICVINE_KEY,
+    format: 'json',
+    resources: 'volume',
+    limit: '50',
+    query,
+    field_list: 'id,name,start_year,count_of_issues'
+  });
+
+  const body = await fetchJson(
+    url, { 'User-Agent': USER_AGENT, Accept: 'application/json' }, 'Comic Vine'
+  );
+
+  return (body.results || []).map((volume) => ({
+    source: 'comicvine',
+    seriesId: String(volume.id),
+    // Match Metron's "Name (year)" shape so both sources read the same.
+    seriesName: volume.start_year
+      ? `${volume.name} (${volume.start_year})`
+      : String(volume.name || 'Unknown series'),
+    yearBegan: volume.start_year || null,
+    yearEnd: null,
+    issueCount: volume.count_of_issues || 0
+  }));
+}
+
+async function comicVineVolumeIssues(volumeId, fromDate) {
+  if (!COMICVINE_KEY) return [];
+
+  const url = 'https://comicvine.gamespot.com/api/issues/?' + new URLSearchParams({
+    api_key: COMICVINE_KEY,
+    format: 'json',
+    filter: `volume:${volumeId}`,
+    sort: 'issue_number:asc',
+    limit: '100',
+    field_list: 'id,name,issue_number,store_date,cover_date,volume,image'
+  });
+
+  const body = await fetchJson(
+    url, { 'User-Agent': USER_AGENT, Accept: 'application/json' }, 'Comic Vine'
+  );
+
+  const issues = (body.results || []).map(mapComicVineIssue);
+  // Comic Vine has no date-range filter here, so trim client-side.
+  return fromDate
+    ? issues.filter((i) => i.releaseDate && i.releaseDate > fromDate)
+    : issues;
+}
+
 /* Issues in one series. `fromDate` limits it to things not yet released, which
  * is all a followed series needs to contribute; omit it to get the whole run,
  * which is what importing a series needs. */
@@ -550,6 +606,26 @@ async function metronSeriesIssues(seriesId, fromDate) {
 
   // Long-running titles can carry a thousand issues; cap the payload.
   return (body.results || []).slice(0, MAX_SERIES_ISSUES).map(mapMetronIssue);
+}
+
+function rankResults(items, parsed) {
+  return items
+    // An entry with no date at all can't drive a release notification, but
+    // it's still a valid thing to track, so keep it and let the UI say so.
+    .filter((r) => r.title)
+    .map((r) => ({ item: r, score: relevanceScore(parsed, r) }))
+    .sort((a, b) => {
+      // Similarity to what was typed decides the order. Date only breaks ties
+      // between equally good matches — newest first, since a tracker is
+      // usually reaching for a current issue.
+      if (b.score !== a.score) return b.score - a.score;
+      if (!a.item.releaseDate && !b.item.releaseDate) return 0;
+      if (!a.item.releaseDate) return 1;
+      if (!b.item.releaseDate) return -1;
+      return b.item.releaseDate.localeCompare(a.item.releaseDate);
+    })
+    .slice(0, MAX_RESULTS)
+    .map((scored) => scored.item);
 }
 
 /* Same issue from both sources: keep Metron's, which has the better date. */
@@ -590,13 +666,20 @@ functions.http('comicSearch', async (req, res) => {
     // different answers to the same series id.
     const wantAll = req.query.all === '1' || req.query.all === 'true';
 
+    /* Which database to ask. Unset means the default behaviour — Metron, with
+     * Comic Vine filling in when Metron comes back thin. Set explicitly by the
+     * source toggle, in which case only that one is consulted. */
+    const source = ['metron', 'comicvine'].includes(String(req.query.source))
+      ? String(req.query.source) : '';
+
     // A seriesId lookup carries no text, so the minimum-length rule only
     // applies to the text-driven modes.
     if (!seriesId && query.length < 3) {
       return res.status(200).json({ results: [], reason: 'query too short' });
     }
 
-    const key = `${mode}|${seriesId}|${wantAll ? 'all' : 'future'}|${query.toLowerCase()}`;
+    const key = `${mode}|${source || 'auto'}|${seriesId}|` +
+                `${wantAll ? 'all' : 'future'}|${query.toLowerCase()}`;
     const cached = cacheGet(searchCache, key, SEARCH_TTL_MS);
     if (cached) {
       res.set('X-Cache', 'hit');
@@ -606,7 +689,9 @@ functions.http('comicSearch', async (req, res) => {
     // Following a series: find series to follow, or list what's forthcoming
     // in one already followed.
     if (mode === 'series') {
-      const series = await searchMetronSeries(query);
+      const series = source === 'comicvine'
+        ? await searchComicVineSeries(query)
+        : await searchMetronSeries(query);
       cacheSet(searchCache, key, series);
       res.set('X-Cache', 'miss');
       return res.status(200).json({ results: series });
@@ -615,9 +700,10 @@ functions.http('comicSearch', async (req, res) => {
     if (seriesId) {
       // all=1 returns the whole run (importing a series); otherwise just what
       // hasn't been released yet (the daily follow check).
-      const issues = await metronSeriesIssues(
-        seriesId, wantAll ? null : todayInZone(TIMEZONE)
-      );
+      const fromDate = wantAll ? null : todayInZone(TIMEZONE);
+      const issues = source === 'comicvine'
+        ? await comicVineVolumeIssues(seriesId, fromDate)
+        : await metronSeriesIssues(seriesId, fromDate);
       cacheSet(searchCache, key, issues);
       res.set('X-Cache', 'miss');
       return res.status(200).json({ results: issues });
@@ -631,12 +717,30 @@ functions.http('comicSearch', async (req, res) => {
     let found = [];
     let metronFailure = null;
 
+    // An explicit source means only that one — no silent fallback, or the
+    // toggle wouldn't be telling the truth about where results came from.
+    if (source === 'comicvine') {
+      const results = dedupe(await searchComicVine(query));
+      const ranked = rankResults(results, parsed);
+      cacheSet(searchCache, key, ranked);
+      res.set('X-Cache', 'miss');
+      return res.status(200).json({ results: ranked });
+    }
+
     try {
       found = await searchMetron(parsed);
     } catch (err) {
       // A Metron outage shouldn't take search down if Comic Vine can answer.
       metronFailure = err;
       console.warn('Metron search failed:', err.message);
+    }
+
+    if (source === 'metron') {
+      if (metronFailure) throw metronFailure;
+      const ranked = rankResults(dedupe(found), parsed);
+      cacheSet(searchCache, key, ranked);
+      res.set('X-Cache', 'miss');
+      return res.status(200).json({ results: ranked });
     }
 
     if (found.length < 5 && COMICVINE_KEY) {
@@ -651,23 +755,7 @@ functions.http('comicSearch', async (req, res) => {
 
     if (!found.length && metronFailure) throw metronFailure;
 
-    const results = dedupe(found)
-      // An entry with no date at all can't drive a release notification, but
-      // it's still a valid thing to track, so keep it and let the UI say so.
-      .filter((r) => r.title)
-      .map((r) => ({ item: r, score: relevanceScore(parsed, r) }))
-      .sort((a, b) => {
-        // Similarity to what was typed decides the order. Date only breaks
-        // ties between equally good matches — newest first, since a tracker
-        // is usually reaching for a current issue.
-        if (b.score !== a.score) return b.score - a.score;
-        if (!a.item.releaseDate && !b.item.releaseDate) return 0;
-        if (!a.item.releaseDate) return 1;
-        if (!b.item.releaseDate) return -1;
-        return b.item.releaseDate.localeCompare(a.item.releaseDate);
-      })
-      .slice(0, MAX_RESULTS)
-      .map((scored) => scored.item);
+    const results = rankResults(dedupe(found), parsed);
 
     cacheSet(searchCache, key, results);
     res.set('X-Cache', 'miss');
