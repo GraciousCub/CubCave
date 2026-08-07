@@ -39,6 +39,11 @@ CubCave.store = (function () {
       // A list, so every device you enable notifications on gets alerted —
       // not just the most recent one.
       pushSubscriptions: [],
+      /* Series you follow. The daily job checks these against the comic
+       * database and adds newly solicited issues to Upcoming by itself —
+       * which is how an issue that isn't in the database yet still reaches
+       * you when it appears. */
+      subscriptions: [],
       updatedAt: null,
       schemaVersion: SCHEMA_VERSION
     };
@@ -97,7 +102,11 @@ CubCave.store = (function () {
           notes: typeof e.notes === 'string' ? e.notes : '',
           dateAdded: typeof e.dateAdded === 'string' ? e.dateAdded : nowISO(),
           dateRead: typeof e.dateRead === 'string' ? e.dateRead : null,
-          sortOrder: typeof e.sortOrder === 'number' ? e.sortOrder : i
+          sortOrder: typeof e.sortOrder === 'number' ? e.sortOrder : i,
+          // Where an entry came from, e.g. "metron:127884". Set when added
+          // from a search result or by a followed series, and used to avoid
+          // adding the same issue twice.
+          sourceId: typeof e.sourceId === 'string' ? e.sourceId : null
         };
       });
 
@@ -113,6 +122,21 @@ CubCave.store = (function () {
         registeredAt: parsed.pushSubscription.registeredAt || nowISO(),
         label: parsed.pushSubscription.label || 'Migrated device'
       }];
+    }
+
+    if (Array.isArray(parsed.subscriptions)) {
+      clean.subscriptions = parsed.subscriptions
+        .filter(function (s) { return s && s.seriesId != null; })
+        .map(function (s) {
+          return {
+            id: typeof s.id === 'string' && s.id ? s.id : uid(),
+            source: typeof s.source === 'string' ? s.source : 'metron',
+            seriesId: String(s.seriesId),
+            seriesName: typeof s.seriesName === 'string' ? s.seriesName : 'Unknown series',
+            addedAt: typeof s.addedAt === 'string' ? s.addedAt : nowISO(),
+            lastCheckedAt: typeof s.lastCheckedAt === 'string' ? s.lastCheckedAt : null
+          };
+        });
     }
 
     if (typeof parsed.updatedAt === 'string') clean.updatedAt = parsed.updatedAt;
@@ -176,6 +200,7 @@ CubCave.store = (function () {
     return {
       entries: data.entries.slice(),
       pushSubscriptions: data.pushSubscriptions.slice(),
+      subscriptions: data.subscriptions.slice(),
       // A file created before any edit has no updatedAt yet; stamp it now so
       // the document on Drive always carries a real timestamp.
       updatedAt: data.updatedAt || nowISO(),
@@ -257,7 +282,8 @@ CubCave.store = (function () {
       notes: String(fields.notes || '').trim(),
       dateAdded: nowISO(),
       dateRead: null,
-      sortOrder: nextMaxSortOrder() + 1
+      sortOrder: nextMaxSortOrder() + 1,
+      sourceId: typeof fields.sourceId === 'string' ? fields.sourceId : null
     };
     // Added straight to Read? Then it was finished now.
     if (entry.status === 'read') entry.dateRead = nowISO();
@@ -330,6 +356,48 @@ CubCave.store = (function () {
     changed();
   }
 
+  /* ---------- followed series ---------- */
+
+  function getSubscriptions() {
+    return data.subscriptions.slice();
+  }
+
+  function isSubscribed(seriesId) {
+    return data.subscriptions.some(function (s) {
+      return s.seriesId === String(seriesId);
+    });
+  }
+
+  function addSubscription(fields) {
+    if (!fields || fields.seriesId == null) return null;
+    if (isSubscribed(fields.seriesId)) return null;
+
+    var sub = {
+      id: uid(),
+      source: fields.source || 'metron',
+      seriesId: String(fields.seriesId),
+      seriesName: String(fields.seriesName || 'Unknown series'),
+      addedAt: nowISO(),
+      lastCheckedAt: null
+    };
+    data.subscriptions.push(sub);
+    changed();
+    return sub;
+  }
+
+  function removeSubscription(id) {
+    var before = data.subscriptions.length;
+    data.subscriptions = data.subscriptions.filter(function (s) { return s.id !== id; });
+    if (data.subscriptions.length !== before) changed();
+  }
+
+  // Used before auto-adding, so a followed series can't create duplicates of
+  // issues already tracked.
+  function hasSourceId(sourceId) {
+    if (!sourceId) return false;
+    return data.entries.some(function (e) { return e.sourceId === sourceId; });
+  }
+
   /* ---------- push subscriptions ---------- */
 
   function getPushSubscriptions() {
@@ -389,6 +457,11 @@ CubCave.store = (function () {
     markRead: markRead,
     remove: remove,
     moveInQueue: moveInQueue,
+    getSubscriptions: getSubscriptions,
+    isSubscribed: isSubscribed,
+    addSubscription: addSubscription,
+    removeSubscription: removeSubscription,
+    hasSourceId: hasSourceId,
     getPushSubscriptions: getPushSubscriptions,
     addPushSubscription: addPushSubscription,
     removePushSubscription: removePushSubscription

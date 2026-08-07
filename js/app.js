@@ -505,6 +505,150 @@ tabs.forEach(function (tab) {
   tab.addEventListener('click', function () { selectTab(tab.dataset.tab); });
 });
 
+/* ---------- followed series ---------- */
+
+var followList = document.getElementById('follow-list');
+var followText = document.getElementById('follow-text');
+var seriesDialog = document.getElementById('series-dialog');
+var seriesInput = document.getElementById('f-series-search');
+var seriesSuggest = document.getElementById('series-suggest');
+var seriesStatus = document.getElementById('series-status');
+
+function renderFollowing() {
+  var subs = store.getSubscriptions();
+  followList.textContent = '';
+
+  followText.textContent = subs.length
+    ? 'New issues are added to Upcoming automatically.'
+    : 'Follow a series and its new issues appear here by themselves — useful when an issue isn\'t in the database yet.';
+
+  subs.forEach(function (sub) {
+    var li = el('li', 'follow-item');
+    li.appendChild(el('span', 'follow-item__name', sub.seriesName));
+
+    var remove = el('button', 'entry__btn', 'Unfollow');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', 'Unfollow ' + sub.seriesName);
+    remove.addEventListener('click', function () {
+      store.removeSubscription(sub.id);
+      toast('Unfollowed ' + sub.seriesName + '.');
+    });
+
+    li.appendChild(remove);
+    followList.appendChild(li);
+  });
+}
+
+function setSeriesStatus(text) {
+  seriesStatus.textContent = text || '';
+  seriesStatus.hidden = !text;
+}
+
+function renderSeriesResults(results) {
+  seriesSuggest.textContent = '';
+
+  if (!results.length) {
+    seriesSuggest.hidden = true;
+    setSeriesStatus('No series found.');
+    return;
+  }
+
+  results.slice(0, 20).forEach(function (item) {
+    var row = el('button', 'suggest__item');
+    row.type = 'button';
+    row.setAttribute('role', 'option');
+    row.appendChild(el('span', 'suggest__title', item.seriesName));
+
+    var already = store.isSubscribed(item.seriesId);
+    row.appendChild(el('span', 'suggest__meta',
+      already ? 'Already following' : item.issueCount + ' issues on record'));
+    row.disabled = already;
+
+    row.addEventListener('pointerdown', function (event) {
+      event.preventDefault();
+      followSeries(item);
+    });
+
+    seriesSuggest.appendChild(row);
+  });
+
+  seriesSuggest.hidden = false;
+  setSeriesStatus('');
+}
+
+function followSeries(item) {
+  var sub = store.addSubscription({
+    source: item.source,
+    seriesId: item.seriesId,
+    seriesName: item.seriesName
+  });
+  if (!sub) return;
+
+  seriesSuggest.hidden = true;
+  setSeriesStatus('Following ' + item.seriesName + ' — checking for issues…');
+
+  // Immediate feedback rather than waiting for the overnight run.
+  CubCave.search.upcomingForSeries(item.seriesId).then(function (issues) {
+    var added = 0;
+    issues.forEach(function (issue) {
+      var sourceId = 'metron:' + issue.sourceId;
+      if (!issue.releaseDate || store.hasSourceId(sourceId)) return;
+      store.add({
+        title: issue.title,
+        series: issue.series,
+        status: 'upcoming',
+        releaseDate: issue.releaseDate,
+        notes: 'Added automatically from ' + item.seriesName + '.',
+        sourceId: sourceId
+      });
+      added += 1;
+    });
+
+    setSeriesStatus(added
+      ? 'Following ' + item.seriesName + ' — added ' + added +
+        (added === 1 ? ' issue.' : ' issues.')
+      : 'Following ' + item.seriesName + '. Nothing solicited yet; it\'ll be ' +
+        'added as soon as it appears.');
+  }).catch(function (err) {
+    // The subscription itself is saved regardless — the daily job will pick
+    // it up even if this immediate check failed.
+    setSeriesStatus('Following ' + item.seriesName + '. (Could not check now: ' +
+                    err.message + ')');
+  });
+}
+
+document.getElementById('follow-add-btn').addEventListener('click', function () {
+  seriesInput.value = '';
+  seriesSuggest.hidden = true;
+  seriesSuggest.textContent = '';
+  setSeriesStatus(CubCave.search.readiness() === 'signed-out'
+    ? 'Sign in to search for series.' : '');
+  seriesDialog.showModal();
+  if (!window.matchMedia('(pointer: coarse)').matches) seriesInput.focus();
+});
+
+document.getElementById('series-close-btn').addEventListener('click', function () {
+  CubCave.search.cancel();
+  seriesDialog.close();
+});
+
+seriesInput.addEventListener('input', function () {
+  CubCave.search.onInput(seriesInput.value, {
+    onState: function (state) {
+      seriesSuggest.hidden = true;
+      setSeriesStatus(SUGGEST_STATUS[state] || '');
+    },
+    onResults: renderSeriesResults,
+    onError: function (message) {
+      seriesSuggest.hidden = true;
+      setSeriesStatus(message);
+    }
+  }, {
+    type: 'series',
+    currentText: function () { return seriesInput.value; }
+  });
+});
+
 /* ---------- notifications ---------- */
 
 var pushCard = document.getElementById('push-card');
@@ -766,6 +910,8 @@ if (savedTab && document.getElementById('panel-' + savedTab)) selectTab(savedTab
 render();
 
 renderPushCard();
+renderFollowing();
+store.subscribe(renderFollowing);
 
 // If notifications are already on, quietly re-check the FCM token — they
 // rotate, and a stale one means alerts stop arriving with no visible symptom.

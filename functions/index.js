@@ -111,7 +111,83 @@ async function readDataFile(accessToken) {
     throw new Error(`Drive read failed (${fileResponse.status}): ${await fileResponse.text()}`);
   }
 
-  return fileResponse.json();
+  // The id comes back too, because writing needs it.
+  return { fileId: files[0].id, data: await fileResponse.json() };
+}
+
+/* ---------- followed series ----------
+ *
+ * For each followed series, ask the database what it now knows is coming, and
+ * add anything not already tracked. This is what gets an issue onto the list
+ * when it wasn't in the database at the time you went looking for it.
+ */
+
+async function writeDataFile(accessToken, fileId, data) {
+  const response = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=id`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=UTF-8'
+      },
+      body: JSON.stringify(data)
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`Drive write failed (${response.status}): ${await response.text()}`);
+  }
+  return response.json();
+}
+
+async function collectSubscriptionAdditions(data, today) {
+  const subscriptions = Array.isArray(data.subscriptions) ? data.subscriptions : [];
+  if (!subscriptions.length) return { additions: [], checked: 0 };
+
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  const knownSourceIds = new Set(entries.map((e) => e && e.sourceId).filter(Boolean));
+
+  // Also match on title + date, so an issue added by hand before the database
+  // knew about it doesn't come back as a duplicate.
+  const knownTitles = new Set(
+    entries.map((e) => `${normaliseText(e && e.title)}|${(e && e.releaseDate) || ''}`)
+  );
+
+  const additions = [];
+  let checked = 0;
+
+  for (const sub of subscriptions) {
+    try {
+      const issues = await metronSeriesIssues(sub.seriesId, today);
+      checked += 1;
+
+      issues.forEach((issue) => {
+        const sourceId = `metron:${issue.sourceId}`;
+        if (knownSourceIds.has(sourceId)) return;
+        if (knownTitles.has(`${normaliseText(issue.title)}|${issue.releaseDate || ''}`)) return;
+        if (!issue.releaseDate) return;   // nothing to notify on
+
+        knownSourceIds.add(sourceId);
+        additions.push({
+          id: `sub-${issue.sourceId}-${Date.now()}`,
+          title: issue.title,
+          series: issue.series,
+          status: 'upcoming',
+          releaseDate: issue.releaseDate,
+          notes: `Added automatically from ${sub.seriesName}.`,
+          dateAdded: new Date().toISOString(),
+          dateRead: null,
+          sortOrder: 0,
+          sourceId
+        });
+      });
+    } catch (err) {
+      // One bad series must not stop the rest, nor the notification run.
+      console.warn(`Could not check followed series "${sub.seriesName}":`, err.message);
+    }
+  }
+
+  return { additions, checked };
 }
 
 /* ---------- message shape ---------- */
@@ -426,6 +502,52 @@ async function searchComicVine(query) {
   return (body.results || []).map(mapComicVineIssue);
 }
 
+/* Series lookup, for following a series. Subscribing by series id rather than
+ * name means "Batman (2025)" can never drift into matching "Batman (1940)". */
+async function searchMetronSeries(query) {
+  if (!METRON_TOKEN) return [];
+
+  const body = await fetchJson(
+    `https://metron.cloud/api/series/?name=${encodeURIComponent(query)}`,
+    {
+      Authorization: `Bearer ${METRON_TOKEN}`,
+      Accept: 'application/json',
+      'User-Agent': USER_AGENT
+    },
+    'Metron'
+  );
+
+  return (body.results || []).map((s) => ({
+    source: 'metron',
+    seriesId: String(s.id),
+    seriesName: s.series || s.name || 'Unknown series',
+    yearBegan: s.year_began || null,
+    yearEnd: s.year_end || null,
+    issueCount: s.issue_count || 0
+  }));
+}
+
+/* Issues in one series. `fromDate` limits it to things not yet released, which
+ * is all a followed series needs to contribute. */
+async function metronSeriesIssues(seriesId, fromDate) {
+  if (!METRON_TOKEN) return [];
+
+  const params = new URLSearchParams({ series_id: String(seriesId) });
+  if (fromDate) params.set('store_date_range_after', fromDate);
+
+  const body = await fetchJson(
+    `https://metron.cloud/api/issue/?${params}`,
+    {
+      Authorization: `Bearer ${METRON_TOKEN}`,
+      Accept: 'application/json',
+      'User-Agent': USER_AGENT
+    },
+    'Metron'
+  );
+
+  return (body.results || []).map(mapMetronIssue);
+}
+
 /* Same issue from both sources: keep Metron's, which has the better date. */
 function dedupe(items) {
   const seen = new Map();
@@ -456,17 +578,39 @@ functions.http('comicSearch', async (req, res) => {
     if (!METRON_TOKEN && !COMICVINE_KEY) {
       throw Object.assign(new Error('Search is not configured'), { status: 503 });
     }
-    if (query.length < 3) {
+    await verifyCaller(req.get('authorization'));
+
+    const mode = String(req.query.type || 'issue');
+    const seriesId = String(req.query.seriesId || '').trim();
+
+    // A seriesId lookup carries no text, so the minimum-length rule only
+    // applies to the text-driven modes.
+    if (!seriesId && query.length < 3) {
       return res.status(200).json({ results: [], reason: 'query too short' });
     }
 
-    await verifyCaller(req.get('authorization'));
-
-    const key = query.toLowerCase();
+    const key = `${mode}|${seriesId}|${query.toLowerCase()}`;
     const cached = cacheGet(searchCache, key, SEARCH_TTL_MS);
     if (cached) {
       res.set('X-Cache', 'hit');
       return res.status(200).json({ results: cached });
+    }
+
+    // Following a series: find series to follow, or list what's forthcoming
+    // in one already followed.
+    if (mode === 'series') {
+      const series = await searchMetronSeries(query);
+      cacheSet(searchCache, key, series);
+      res.set('X-Cache', 'miss');
+      return res.status(200).json({ results: series });
+    }
+
+    if (seriesId) {
+      const today = todayInZone(TIMEZONE);
+      const issues = await metronSeriesIssues(seriesId, today);
+      cacheSet(searchCache, key, issues);
+      res.set('X-Cache', 'miss');
+      return res.status(200).json({ results: issues });
     }
 
     const parsed = parseQuery(query);
@@ -533,12 +677,37 @@ functions.http('releaseCheck', async (req, res) => {
 
   try {
     const accessToken = await getAccessToken();
-    const data = await readDataFile(accessToken);
+    const file = await readDataFile(accessToken);
+    const data = file && file.data;
 
-    if (!data) {
+    if (!file) {
       const message = `No ${DRIVE_FILE_NAME} in appDataFolder yet — nothing to check.`;
       console.log(message);
       return res.status(200).json({ ok: true, today, message });
+    }
+
+    /* Followed series first, so an issue the database only just learned about
+     * can still notify today if that's its release date. */
+    let added = [];
+    if (!dryRun) {
+      const found = await collectSubscriptionAdditions(data, today);
+      if (found.additions.length) {
+        /* The only write this function performs, and only on the rare day a
+         * followed series gains an issue. The client syncs last-write-wins, so
+         * re-read immediately beforehand and append to THAT copy — otherwise a
+         * change made on a phone since the read at the top would be lost. */
+        const fresh = await readDataFile(accessToken);
+        const target = (fresh && fresh.data) || data;
+        const targetId = (fresh && fresh.fileId) || file.fileId;
+
+        target.entries = (target.entries || []).concat(found.additions);
+        target.updatedAt = new Date().toISOString();
+        await writeDataFile(accessToken, targetId, target);
+
+        added = found.additions;
+        data.entries = target.entries;   // notify on them in this same run
+        console.log(`Followed series added ${added.length} issue(s)`);
+      }
     }
 
     const entries = Array.isArray(data.entries) ? data.entries : [];
@@ -559,7 +728,9 @@ functions.http('releaseCheck', async (req, res) => {
     );
 
     if (!due.length) {
-      return res.status(200).json({ ok: true, today, due: 0, sent: 0 });
+      return res.status(200).json({
+        ok: true, today, due: 0, sent: 0, autoAdded: added.map((e) => e.title)
+      });
     }
     if (!tokens.length) {
       console.warn('Comics are out today but no devices are registered.');
@@ -616,6 +787,7 @@ functions.http('releaseCheck', async (req, res) => {
       ok: true,
       today,
       due: due.map((e) => e.title),
+      autoAdded: added.map((e) => e.title),
       sent: response.successCount,
       failed: response.failureCount
     });

@@ -13,6 +13,8 @@ process.env.GOOGLE_CLIENT_ID = 'test-client';
 process.env.GOOGLE_CLIENT_SECRET = 'test-secret';
 process.env.GOOGLE_REFRESH_TOKEN = 'test-refresh';
 process.env.TIMEZONE = 'Europe/London';
+// Captured at module load in index.js, so it has to be set before the require.
+process.env.METRON_TOKEN = 'test-metron-token';
 
 /* ---------- stub firebase-admin before index.js loads it ---------- */
 
@@ -55,7 +57,10 @@ let driveFile = null;
 let tokenStatus = 200;
 let tokenBody = { access_token: 'fake-access-token', expires_in: 3600 };
 let driveListStatus = 200;
+let metronIssues = [];
+let metronFails = false;
 const calls = [];
+const writes = [];
 
 global.fetch = async (url, options = {}) => {
   url = String(url);
@@ -68,6 +73,16 @@ global.fetch = async (url, options = {}) => {
   });
 
   if (url.includes('oauth2.googleapis.com/token')) return json(tokenBody, tokenStatus);
+
+  if (url.includes('metron.cloud')) {
+    if (metronFails) return json({ detail: 'boom' }, 500);
+    return json({ count: metronIssues.length, results: metronIssues });
+  }
+
+  if (url.includes('/upload/drive/v3/files/')) {
+    writes.push(JSON.parse(options.body));
+    return json({ id: 'FILE1' });
+  }
   if (url.includes('/drive/v3/files?')) {
     if (driveListStatus !== 200) return json({ error: 'nope' }, driveListStatus);
     return json({ files: driveFile ? [{ id: 'FILE1', name: 'cubcave-data.json' }] : [] });
@@ -187,6 +202,78 @@ const device = (t, label) => ({ fcmToken: t, label, registeredAt: '2026-08-01T00
     pushSubscriptions: [device('tok-a', 'Phone'), device('tok-dead', 'Old laptop')]
   };
   show('partialFailure', (await run({ date: '2026-10-07' })).body);
+
+  /* ---- followed series ---- */
+  const metronIssue = (id, number, storeDate) => ({
+    id, number, issue: `Batman (2025) #${number}`,
+    series: { id: 12829, name: 'Batman', year_began: 2025 },
+    store_date: storeDate, cover_date: storeDate, image: ''
+  });
+  const withSub = (entries = []) => ({
+    entries,
+    pushSubscriptions: [device('tok-a', 'Phone')],
+    subscriptions: [{ id: 's1', source: 'metron', seriesId: '12829', seriesName: 'Batman (2025)' }]
+  });
+
+  // 12. A newly solicited issue is added to Upcoming by itself
+  writes.length = 0;
+  driveFile = withSub([]);
+  metronIssues = [metronIssue(999, '13', '2026-09-02')];
+  let res12 = await run({ date: '2026-08-07' });
+  show('followedSeriesAutoAdds', {
+    autoAdded: res12.body.autoAdded,
+    wroteToDrive: writes.length,
+    entryWritten: writes[0] && writes[0].entries[0],
+  });
+
+  // 13. Running again must not add it twice
+  writes.length = 0;
+  driveFile = withSub([{
+    id: 'x', title: 'Batman #13', series: 'Batman (2025)', status: 'upcoming',
+    releaseDate: '2026-09-02', notes: '', dateAdded: '2026-08-07T00:00:00Z',
+    dateRead: null, sortOrder: 0, sourceId: 'metron:999'
+  }]);
+  metronIssues = [metronIssue(999, '13', '2026-09-02')];
+  const res13 = await run({ date: '2026-08-07' });
+  show('noDuplicateOnSecondRun', { autoAdded: res13.body.autoAdded, wroteToDrive: writes.length });
+
+  // 14. Nothing new -> no Drive write at all
+  writes.length = 0;
+  driveFile = withSub([]);
+  metronIssues = [];
+  const res14 = await run({ date: '2026-08-07' });
+  show('noWriteWhenNothingNew', { autoAdded: res14.body.autoAdded, wroteToDrive: writes.length });
+
+  // 15. Auto-added issue releasing TODAY notifies in the same run
+  writes.length = 0;
+  driveFile = withSub([]);
+  metronIssues = [metronIssue(1000, '14', '2026-08-07')];
+  sent.length = 0;
+  sendBehaviour = (m) => ({ successCount: m.tokens.length, failureCount: 0,
+    responses: m.tokens.map(() => ({ success: true })) });
+  const res15 = await run({ date: '2026-08-07' });
+  show('autoAddedNotifiesSameDay', {
+    autoAdded: res15.body.autoAdded, sent: res15.body.sent,
+    notification: sent[0] && sent[0].data
+  });
+
+  // 16. Metron down -> notifications still go out
+  writes.length = 0;
+  metronFails = true;
+  driveFile = withSub([entry({ releaseDate: '2026-08-07' })]);
+  const res16 = await run({ date: '2026-08-07' });
+  show('metronOutageDoesNotBlockNotifications', {
+    due: res16.body.due, sent: res16.body.sent, wroteToDrive: writes.length
+  });
+  metronFails = false;
+
+  // 17. Dry run never writes
+  writes.length = 0;
+  driveFile = withSub([]);
+  metronIssues = [metronIssue(1001, '15', '2026-10-07')];
+  const res17 = await run({ date: '2026-08-07', dryRun: '1' });
+  show('dryRunNeverWrites', { wroteToDrive: writes.length, dryRun: res17.body.dryRun });
+  metronIssues = [];
 
   // 11. Timezone correctness — the date used must be London's, not UTC's
   const londonToday = new Intl.DateTimeFormat('en-CA', {

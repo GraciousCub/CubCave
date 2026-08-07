@@ -79,6 +79,18 @@
       </div>
     </div>
 
+    <!-- Followed series: the daily job adds their new issues automatically. -->
+    <div class="follow-card" id="follow-card">
+      <div class="follow-card__head">
+        <div class="follow-card__body">
+          <div class="push-card__title">Following</div>
+          <div class="push-card__text" id="follow-text"></div>
+        </div>
+        <button class="btn" type="button" id="follow-add-btn">+ Follow</button>
+      </div>
+      <ul class="follow-list" id="follow-list"></ul>
+    </div>
+
     <ul class="entry-list" data-list="upcoming"></ul>
     <p class="empty" data-empty="upcoming">
       Nothing on the calendar. Add issues with a release date and you'll get a notification the day they drop.
@@ -159,6 +171,31 @@
       <button class="btn btn--primary" type="submit" id="save-btn">Save</button>
     </div>
   </form>
+</dialog>
+
+<!-- Follow-a-series sheet. -->
+<dialog class="sheet" id="series-dialog" aria-labelledby="series-dialog-title">
+  <div class="sheet__form">
+    <h2 class="sheet__title" id="series-dialog-title">Follow a series</h2>
+    <p class="field__hint">
+      New issues of a followed series are added to Upcoming automatically, even
+      if the database doesn&rsquo;t know about them yet.
+    </p>
+
+    <label class="field">
+      <span class="field__label">Series name</span>
+      <input class="field__input" type="text" id="f-series-search"
+             placeholder="Batman" autocomplete="off" spellcheck="false">
+    </label>
+
+    <div class="suggest" id="series-suggest" role="listbox" aria-label="Matching series" hidden></div>
+    <p class="field__hint" id="series-status" hidden></p>
+
+    <div class="sheet__actions">
+      <span class="sheet__spacer"></span>
+      <button class="btn" type="button" id="series-close-btn">Close</button>
+    </div>
+  </div>
 </dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

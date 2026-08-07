@@ -61,8 +61,19 @@ CubCave.search = (function () {
     if (controller) { controller.abort(); controller = null; }
   }
 
+  function endpointUrl(params) {
+    var base = CubCave.config.searchEndpoint;
+    var pairs = [];
+    Object.keys(params).forEach(function (k) {
+      if (params[k] != null && params[k] !== '') {
+        pairs.push(k + '=' + encodeURIComponent(params[k]));
+      }
+    });
+    return base + (base.indexOf('?') === -1 ? '?' : '&') + pairs.join('&');
+  }
+
   /* One request. Rejects with an Error whose message is fit to show a user. */
-  function fetchResults(query) {
+  function fetchResults(query, params) {
     var token = CubCave.drive.currentAccessToken();
     if (!token) return Promise.reject(new Error('Sign in to search.'));
 
@@ -73,9 +84,7 @@ CubCave.search = (function () {
       if (controller) controller.abort();
     }, TIMEOUT_MS);
 
-    var url = CubCave.config.searchEndpoint +
-      (CubCave.config.searchEndpoint.indexOf('?') === -1 ? '?' : '&') +
-      'q=' + encodeURIComponent(query);
+    var url = endpointUrl(Object.assign({ q: query }, params || {}));
 
     return fetch(url, {
       headers: { Authorization: 'Bearer ' + token },
@@ -117,14 +126,15 @@ CubCave.search = (function () {
    * state is one of: 'idle' | 'searching' | 'unconfigured' | 'offline' |
    * 'signed-out' | 'too-short'
    */
-  function onInput(text, handlers) {
+  function onInput(text, handlers, options) {
     handlers = handlers || {};
+    options = options || {};
     var query = String(text || '').trim();
-    var key = normalise(query);
+    var key = (options.type || 'issue') + '|' + normalise(query);
 
     cancel();
 
-    if (key.length < MIN_CHARS) {
+    if (normalise(query).length < MIN_CHARS) {
       lastQuery = '';
       if (handlers.onState) handlers.onState(key.length ? 'too-short' : 'idle');
       return;
@@ -146,10 +156,12 @@ CubCave.search = (function () {
     if (handlers.onState) handlers.onState('searching');
 
     timer = setTimeout(function () {
-      fetchResults(query).then(function (results) {
+      fetchResults(query, { type: options.type }).then(function (results) {
         remember(key, results);
-        // Ignore a response that arrived after the user moved on.
-        if (normalise(query) !== normalise(currentText())) return;
+        // Ignore a response that arrived after the user moved on. Which box
+        // "current" refers to depends on the caller, so it can supply its own.
+        var readCurrent = options.currentText || currentText;
+        if (normalise(query) !== normalise(readCurrent())) return;
         lastQuery = key;
         if (handlers.onResults) handlers.onResults(results, query);
       }).catch(function (err) {
@@ -164,11 +176,30 @@ CubCave.search = (function () {
   function currentText() { return currentTextFn(); }
   function bindCurrentText(fn) { currentTextFn = fn; }
 
+  /* Issues in a followed series that haven't been released yet. Used the
+   * moment you follow something, so you see straight away what it brought in
+   * rather than waiting for tomorrow's scheduled check. */
+  function upcomingForSeries(seriesId) {
+    var token = CubCave.drive.currentAccessToken();
+    if (!token) return Promise.reject(new Error('Sign in first.'));
+
+    return fetch(endpointUrl({ seriesId: seriesId }), {
+      headers: { Authorization: 'Bearer ' + token }
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; })
+        .then(function (body) {
+          if (!response.ok) throw new Error(body.error || 'Could not check the series.');
+          return body.results || [];
+        });
+    });
+  }
+
   return {
     MIN_CHARS: MIN_CHARS,
     isConfigured: isConfigured,
     readiness: readiness,
     onInput: onInput,
+    upcomingForSeries: upcomingForSeries,
     cancel: cancel,
     bindCurrentText: bindCurrentText
   };

@@ -361,6 +361,35 @@ Test the proxy with no key, no network and no quota used:
 node functions/test-search.js
 ```
 
+## Following a series
+
+The **Upcoming** tab has a *Following* card. Follow a series and its new issues
+are added to Upcoming automatically — which is how an issue reaches your list
+even when the database doesn't know about it yet.
+
+Following is by **series id**, not name, so "Batman (2025)" can never drift into
+matching "Batman (1940)".
+
+**Two things check for new issues:**
+
+1. **When you follow**, immediately — so you can see what it brought in.
+2. **The daily job**, before it sends notifications. An issue solicited
+   overnight that turns out to be released *today* still notifies you today.
+
+An issue added this way carries a `sourceId` (e.g. `metron:127884`), so
+re-checking never creates duplicates. Unfollowing removes the subscription but
+**keeps the issues** already added — they're yours now.
+
+**This is the one case where the daily job writes to Drive**, and only on the
+rare day a followed series gains an issue. Because the client syncs
+last-write-wins, the job re-reads the file immediately before writing and
+appends to *that* copy, so an edit made on your phone since the run started
+isn't lost. On every other day it writes nothing at all.
+
+`METRON_TOKEN` must be in **both** `functions/.env.yaml` (for the daily check)
+and `functions/.env.search.yaml` (for search). Without it in the former, the
+follow check silently does nothing.
+
 ### Setup
 
 **1. Metron token** — free account at [metron.cloud](https://metron.cloud/),
