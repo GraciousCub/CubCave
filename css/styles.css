@@ -396,6 +396,62 @@ button.tile:active,
   color: var(--green);
 }
 
+/* ---------- cross-database match picker ---------- */
+
+.match-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.match-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.match-option:hover { border-color: var(--accent); }
+.match-option:active { transform: translateY(1px); }
+
+.match-option__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.match-option__confidence {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.match-option__confidence--very-likely {
+  background: rgba(87, 199, 138, 0.18);
+  color: var(--green);
+}
+
+.match-option__confidence--likely {
+  background: rgba(78, 168, 222, 0.18);
+  color: var(--blue);
+}
+
 /* ---------- sign-in conflict ---------- */
 
 .merge-option {

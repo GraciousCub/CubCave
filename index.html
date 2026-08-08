@@ -120,6 +120,7 @@
     </div>
     <div class="series-head__actions">
       <button class="btn" type="button" id="series-follow-btn">Follow</button>
+      <button class="btn" type="button" id="series-match-btn" hidden></button>
       <button class="btn" type="button" id="series-read-all-btn">Mark released issues read</button>
       <button class="btn btn--danger" type="button" id="series-delete-btn">Delete series</button>
     </div>
@@ -226,6 +227,20 @@
       <button class="btn" type="button" id="single-issue-btn">Add one issue</button>
       <span class="sheet__spacer"></span>
       <button class="btn" type="button" id="series-close-btn">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Ranked guesses at the same series in the other catalogue. -->
+<dialog class="sheet" id="match-dialog" aria-labelledby="match-title">
+  <div class="sheet__form">
+    <h2 class="sheet__title" id="match-title">Find on the other database</h2>
+    <p class="field__hint" id="match-intro"></p>
+    <div class="match-list" id="match-list"></div>
+    <p class="field__hint" id="match-status" hidden></p>
+    <div class="sheet__actions">
+      <span class="sheet__spacer"></span>
+      <button class="btn" type="button" id="match-close-btn">Close</button>
     </div>
   </div>
 </dialog>

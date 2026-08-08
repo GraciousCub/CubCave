@@ -352,7 +352,13 @@ function cacheGet(cache, key, ttl) {
   return hit.value;
 }
 
+/* A whole-series fetch can be 883 issues; 200 of those cached at once would
+ * be tens of megabytes on a 256MB instance. Big results skip the cache — they
+ * come from an explicit import, not from typing, so they aren't repeated. */
+const MAX_CACHEABLE_ITEMS = 150;
+
 function cacheSet(cache, key, value) {
+  if (Array.isArray(value) && value.length > MAX_CACHEABLE_ITEMS) return;
   // Crude bound: a long-lived instance must not grow without limit.
   if (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value);
   cache.set(key, { at: Date.now(), value });
@@ -603,33 +609,74 @@ async function searchComicVineSeries(query) {
   }));
 }
 
+const PAGE_SIZE = 100;          // both APIs cap a page at 100
+const MAX_PAGES = 15;           // 1,500 issues is beyond any real run
+const PAGE_PAUSE_MS = 120;      // be a considerate client
+
+function pause(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function comicVineVolumeIssues(volumeId, fromDate) {
   if (!COMICVINE_KEY) return [];
 
-  const url = 'https://comicvine.gamespot.com/api/issues/?' + new URLSearchParams({
-    api_key: COMICVINE_KEY,
-    format: 'json',
-    filter: `volume:${volumeId}`,
-    sort: 'issue_number:asc',
-    limit: '100',
-    field_list: 'id,name,issue_number,store_date,cover_date,volume,image'
-  });
+  const headers = { 'User-Agent': USER_AGENT, Accept: 'application/json' };
 
-  const body = await fetchJson(
-    url, { 'User-Agent': USER_AGENT, Accept: 'application/json' }, 'Comic Vine'
-  );
+  const pageUrl = (offset, newestFirst) =>
+    'https://comicvine.gamespot.com/api/issues/?' + new URLSearchParams({
+      api_key: COMICVINE_KEY,
+      format: 'json',
+      filter: `volume:${volumeId}`,
+      sort: newestFirst ? 'store_date:desc' : 'issue_number:asc',
+      limit: String(PAGE_SIZE),
+      offset: String(offset),
+      field_list: 'id,name,issue_number,store_date,cover_date,volume,image'
+    });
 
-  const issues = (body.results || []).map(mapComicVineIssue);
-  // Comic Vine has no date-range filter here, so trim client-side.
-  return fromDate
-    ? issues.filter((i) => i.releaseDate && i.releaseDate > fromDate)
-    : issues;
+  /* Only unreleased issues wanted (the daily follow check): Comic Vine has no
+   * date filter here, but sorting newest-first puts them all on page one — a
+   * series can't have 100 issues still to come. One request instead of nine. */
+  if (fromDate) {
+    const body = await fetchJson(pageUrl(0, true), headers, 'Comic Vine');
+    return (body.results || [])
+      .map(mapComicVineIssue)
+      .filter((i) => i.releaseDate && i.releaseDate > fromDate);
+  }
+
+  // Whole run: page through it.
+  const issues = [];
+  let offset = 0;
+  let total = Infinity;
+
+  for (let page = 0; page < MAX_PAGES && offset < total && issues.length < MAX_SERIES_ISSUES; page++) {
+    let body;
+    try {
+      body = await fetchJson(pageUrl(offset, false), headers, 'Comic Vine');
+    } catch (err) {
+      // Keep what we have rather than losing the whole import to one bad page.
+      if (!issues.length) throw err;
+      console.warn('Comic Vine paging stopped early:', err.message);
+      break;
+    }
+
+    const batch = body.results || [];
+    if (!batch.length) break;
+    batch.forEach((issue) => issues.push(mapComicVineIssue(issue)));
+
+    total = Number(body.number_of_total_results) || batch.length;
+    offset += PAGE_SIZE;
+    if (offset < total) await pause(PAGE_PAUSE_MS);
+  }
+
+  return issues.slice(0, MAX_SERIES_ISSUES);
 }
 
 /* Issues in one series. `fromDate` limits it to things not yet released, which
  * is all a followed series needs to contribute; omit it to get the whole run,
  * which is what importing a series needs. */
-const MAX_SERIES_ISSUES = 500;
+/* Enough for anything real: Detective Comics (1937) is 883 issues and Action
+ * Comics is the longest-running title there is. */
+const MAX_SERIES_ISSUES = 1500;
 
 async function metronSeriesIssues(seriesId, fromDate) {
   if (!METRON_TOKEN) return [];
@@ -637,18 +684,34 @@ async function metronSeriesIssues(seriesId, fromDate) {
   const params = new URLSearchParams({ series_id: String(seriesId) });
   if (fromDate) params.set('store_date_range_after', fromDate);
 
-  const body = await fetchJson(
-    `https://metron.cloud/api/issue/?${params}`,
-    {
-      Authorization: `Bearer ${METRON_TOKEN}`,
-      Accept: 'application/json',
-      'User-Agent': USER_AGENT
-    },
-    'Metron'
-  );
+  const headers = {
+    Authorization: `Bearer ${METRON_TOKEN}`,
+    Accept: 'application/json',
+    'User-Agent': USER_AGENT
+  };
 
-  // Long-running titles can carry a thousand issues; cap the payload.
-  return (body.results || []).slice(0, MAX_SERIES_ISSUES).map(mapMetronIssue);
+  /* Metron pages at 100 and hands back a `next` URL. Detective Comics (1937)
+   * is 883 issues, so a single page would silently truncate most long runs. */
+  const issues = [];
+  let url = `https://metron.cloud/api/issue/?${params}`;
+
+  for (let page = 0; page < MAX_PAGES && url && issues.length < MAX_SERIES_ISSUES; page++) {
+    let body;
+    try {
+      body = await fetchJson(url, headers, 'Metron');
+    } catch (err) {
+      // Keep what we have rather than losing the whole import to one bad page.
+      if (!issues.length) throw err;
+      console.warn('Metron paging stopped early:', err.message);
+      break;
+    }
+
+    (body.results || []).forEach((issue) => issues.push(mapMetronIssue(issue)));
+    url = body.next || null;
+    if (url) await pause(PAGE_PAUSE_MS);
+  }
+
+  return issues.slice(0, MAX_SERIES_ISSUES);
 }
 
 function rankResults(items, parsed) {
@@ -731,6 +794,10 @@ async function comicVineVolume(volumeId) {
     seriesName: volume.start_year
       ? `${volume.name} (${volume.start_year})`
       : String(volume.name || ''),
+    // Needed by the match scorer; without it the year comparison silently
+    // contributes nothing in the Comic Vine -> Metron direction.
+    yearBegan: volume.start_year || null,
+    yearEnd: null,
     issueCount: volume.count_of_issues || 0,
     coverUrl: (volume.image && (volume.image.thumb_url || volume.image.icon_url)) || ''
   };
@@ -748,6 +815,98 @@ async function linkSeries(source, seriesId) {
   }
   if (source === 'comicvine') return metronSeriesByCvId(seriesId);
   return null;
+}
+
+/* ---------- finding a counterpart by hand ----------
+ *
+ * linkSeries() only works when Metron recorded a Comic Vine id. When it
+ * hasn't, this searches the other catalogue by name and ranks what it finds,
+ * so a person can pick. Ranking, not deciding: an automatic choice here would
+ * eventually attach the wrong run of a long-lived title.
+ */
+
+function stripYear(name) {
+  return String(name || '').replace(/\s*\((\d{4})\)\s*$/, '').trim();
+}
+
+function scoreCandidate(self, candidate) {
+  var reasons = [];
+  var score = 0;
+
+  var a = normaliseText(stripYear(self.name));
+  var b = normaliseText(stripYear(candidate.seriesName));
+
+  if (a && a === b) {
+    score += 60;
+    reasons.push('same name');
+  } else if (a && b && (b.indexOf(a) === 0 || a.indexOf(b) === 0)) {
+    score += 30;
+    reasons.push('similar name');
+  } else if (a && b && (b.indexOf(a) !== -1 || a.indexOf(b) !== -1)) {
+    score += 15;
+    reasons.push('name contains');
+  }
+
+  if (self.year && candidate.yearBegan) {
+    var gap = Math.abs(Number(self.year) - Number(candidate.yearBegan));
+    if (gap === 0) { score += 30; reasons.push('same year'); }
+    else if (gap === 1) { score += 12; reasons.push('year within 1'); }
+    else { score -= 15; reasons.push('different year'); }
+  }
+
+  if (self.issueCount && candidate.issueCount) {
+    var diff = Math.abs(self.issueCount - candidate.issueCount);
+    if (diff === 0) { score += 15; reasons.push('same issue count'); }
+    else if (diff <= 2) { score += 10; reasons.push('issue counts within 2'); }
+    else if (diff <= 5) { score += 4; reasons.push('issue counts close'); }
+  }
+
+  return { score: score, reasons: reasons };
+}
+
+async function matchCandidates(source, seriesId) {
+  let self = null;
+
+  if (source === 'metron') {
+    const detail = await metronSeriesDetail(seriesId);
+    if (detail) {
+      self = { name: detail.name, year: detail.year_began, issueCount: detail.issue_count };
+    }
+  } else {
+    const volume = await comicVineVolume(seriesId);
+    if (volume) {
+      self = {
+        name: stripYear(volume.seriesName),
+        year: volume.yearBegan,
+        issueCount: volume.issueCount
+      };
+    }
+  }
+
+  if (!self || !self.name) {
+    throw Object.assign(new Error('Could not read that series'), { status: 404 });
+  }
+
+  const other = source === 'metron' ? 'comicvine' : 'metron';
+  const found = other === 'comicvine'
+    ? await searchComicVineSeries(self.name)
+    : await searchMetronSeries(self.name);
+
+  return found
+    .map(function (candidate) {
+      var scored = scoreCandidate(self, candidate);
+      return Object.assign({}, candidate, {
+        score: scored.score,
+        reasons: scored.reasons,
+        // Plain words rather than a number, which would imply more precision
+        // than name-and-year matching actually has.
+        confidence: scored.score >= 90 ? 'very likely'
+                  : scored.score >= 60 ? 'likely'
+                  : scored.score >= 30 ? 'possible' : 'unlikely'
+      });
+    })
+    .sort(function (x, y) { return y.score - x.score; })
+    .slice(0, 12);
 }
 
 /* Same issue from both sources: keep Metron's, which has the better date. */
@@ -810,6 +969,17 @@ functions.http('comicSearch', async (req, res) => {
 
     // Following a series: find series to follow, or list what's forthcoming
     // in one already followed.
+    // Ranked guesses at the counterpart, for picking by hand.
+    if (mode === 'match') {
+      if (!seriesId || !source) {
+        return res.status(400).json({ error: 'match needs seriesId and source', results: [] });
+      }
+      const candidates = await matchCandidates(source, seriesId);
+      cacheSet(searchCache, key, candidates);
+      res.set('X-Cache', 'miss');
+      return res.status(200).json({ results: candidates });
+    }
+
     // Find the same series in the other database.
     if (mode === 'link') {
       if (!seriesId || !source) {

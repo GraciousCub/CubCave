@@ -459,7 +459,15 @@ reports how many were.
 `Add one issue` inside that sheet is the escape hatch for anything the database
 doesn't have — the old per-issue form, unchanged.
 
-Long runs are capped at 500 issues per import.
+**Long runs page properly.** Both APIs cap a page at 100 — Metron hands back a
+`next` URL, Comic Vine uses `offset` — so a single request would silently
+truncate most long titles. Detective Comics (1937) imports all **883** issues,
+in 9 upstream requests. The ceiling is 1,500 issues, beyond any real run.
+
+Comic Vine is slow at this (about 16 seconds for 883 issues against Metron's 3),
+which is why the function is deployed with a raised timeout. The daily follow
+check never pages: it asks Comic Vine for issues newest-first and takes one
+page, since no series has 100 issues still to come.
 
 ### Missing covers
 
@@ -496,6 +504,23 @@ follow the series by, so both sources land in one series rather than two.
 
 The logos beside a series — in the Following list and at the top of the series
 view — show which catalogues it's tracked in. Two logos means both.
+
+### Linking by hand
+
+The automatic link only works when Metron recorded a `cv_id`. When it hasn't, a
+**Find on Metron / Find on Comic Vine** button appears — both in the Following
+list and in the series view — and disappears once a series is in both.
+
+It searches the other catalogue and ranks what it finds by **name, start year
+and issue count**, labelling each *very likely* / *likely* / *possible* /
+*unlikely* and showing which of those matched. It ranks rather than decides:
+choosing automatically would eventually attach the wrong run of a long-lived
+title, and *Batman (1954)* also has 12 issues.
+
+Picking one attaches that catalogue to the series and imports any issues it has
+that you don't, **matched on issue number** so nothing is duplicated. If the
+series isn't followed, the issues are still imported and it tells you that
+following is what keeps both watched.
 
 **Two things check for new issues:**
 
@@ -536,7 +561,7 @@ comic database credentials.
 **3. Deploy:**
 
 ```bash
-gcloud functions deploy comic-search --gen2 --runtime=nodejs22 --region=europe-west2 --source=./functions --entry-point=comicSearch --trigger-http --allow-unauthenticated --max-instances=3 --env-vars-file=functions/.env.search.yaml
+gcloud functions deploy comic-search --gen2 --runtime=nodejs22 --region=europe-west2 --source=./functions --entry-point=comicSearch --trigger-http --allow-unauthenticated --max-instances=3 --timeout=120s --env-vars-file=functions/.env.search.yaml
 ```
 
 **4. Get the URL and put it in `js/config.js` as `searchEndpoint`:**

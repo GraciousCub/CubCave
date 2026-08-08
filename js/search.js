@@ -229,6 +229,21 @@ CubCave.search = (function () {
       });
     },
 
+    /* Ranked guesses at the same series in the other catalogue, for when
+     * there's no recorded link to follow. */
+    matchCandidates: function (seriesId, source) {
+      var token = CubCave.drive.currentAccessToken();
+      if (!token) return Promise.reject(new Error('Sign in first.'));
+      return fetch(endpointUrl({ type: 'match', seriesId: seriesId, source: source }), {
+        headers: { Authorization: 'Bearer ' + token }
+      }).then(function (r) {
+        return r.json().then(function (b) {
+          if (!r.ok) throw new Error(b.error || 'Could not search the other database.');
+          return b.results || [];
+        });
+      });
+    },
+
     seriesByName: function (name, source) {
       var token = CubCave.drive.currentAccessToken();
       if (!token) return Promise.reject(new Error('Sign in first.'));

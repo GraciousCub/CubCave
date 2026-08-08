@@ -604,6 +604,7 @@ function renderSeriesView() {
   seriesReadAllBtn.dataset.count = String(markable.length);
 
   renderFollowButton();
+  renderMatchButton();
 }
 
 function render() {
@@ -1158,6 +1159,168 @@ function sourceBadges(sources) {
   return strip;
 }
 
+/* ---------- matching a series across databases ---------- */
+
+var matchDialog = document.getElementById('match-dialog');
+var matchList = document.getElementById('match-list');
+var matchIntro = document.getElementById('match-intro');
+var matchStatus = document.getElementById('match-status');
+var seriesMatchBtn = document.getElementById('series-match-btn');
+
+function sourceName(id) {
+  var meta = SOURCES.filter(function (s) { return s.id === id; })[0];
+  return meta ? meta.name : id;
+}
+
+// Which catalogues a series is currently known in, followed or not.
+function knownSourcesFor(seriesName) {
+  var sub = store.subscriptionByName(seriesName);
+  if (sub && sub.sources.length) return sub.sources.slice();
+
+  var seen = {};
+  var out = [];
+  entriesInSeries(seriesName).forEach(function (entry) {
+    if (!entry.seriesSource || !entry.seriesId) return;
+    if (seen[entry.seriesSource]) return;
+    seen[entry.seriesSource] = true;
+    out.push({ source: entry.seriesSource, seriesId: entry.seriesId });
+  });
+  return out;
+}
+
+function missingSourceFor(seriesName) {
+  var known = knownSourcesFor(seriesName);
+  if (!known.length) return null;
+  var have = known.map(function (s) { return s.source; });
+  if (have.indexOf('metron') === -1) return { want: 'metron', from: known[0] };
+  if (have.indexOf('comicvine') === -1) return { want: 'comicvine', from: known[0] };
+  return null;   // already in both
+}
+
+function setMatchStatus(text) {
+  matchStatus.textContent = text || '';
+  matchStatus.hidden = !text;
+}
+
+function openMatchDialog(seriesName) {
+  var gap = missingSourceFor(seriesName);
+  if (!gap) return;
+
+  matchIntro.textContent = 'Looking for “' + seriesName + '” on ' +
+    sourceName(gap.want) + '. Best guesses first — check the year and issue ' +
+    'count before choosing, since long-running titles are reused.';
+  matchList.textContent = '';
+  setMatchStatus('Searching ' + sourceName(gap.want) + '…');
+  matchDialog.showModal();
+
+  CubCave.search.matchCandidates(gap.from.seriesId, gap.from.source)
+    .then(function (candidates) {
+      if (!candidates.length) {
+        setMatchStatus('Nothing similar found on ' + sourceName(gap.want) + '.');
+        return;
+      }
+      setMatchStatus('');
+      candidates.forEach(function (candidate) {
+        matchList.appendChild(matchRow(seriesName, candidate));
+      });
+    })
+    .catch(function (err) { setMatchStatus(err.message); });
+}
+
+function matchRow(seriesName, candidate) {
+  var row = el('button', 'match-option');
+  row.type = 'button';
+
+  row.appendChild(thumbElement(candidate.coverUrl, candidate.seriesName));
+
+  var text = el('span', 'match-option__text');
+  text.appendChild(el('span', 'suggest__title', candidate.seriesName));
+  text.appendChild(el('span', 'suggest__meta',
+    candidate.issueCount + (candidate.issueCount === 1 ? ' issue' : ' issues') +
+    (candidate.reasons.length ? ' · ' + candidate.reasons.join(', ') : '')));
+  row.appendChild(text);
+
+  row.appendChild(el('span',
+    'match-option__confidence match-option__confidence--' +
+      candidate.confidence.replace(/\s+/g, '-'),
+    candidate.confidence));
+
+  row.addEventListener('click', function () { linkCandidate(seriesName, candidate); });
+  return row;
+}
+
+function linkCandidate(seriesName, candidate) {
+  matchList.textContent = '';
+  setMatchStatus('Linking to ' + candidate.seriesName + '…');
+
+  var sub = store.subscriptionByName(seriesName);
+  var watching = false;
+  if (sub) {
+    watching = store.addSubscriptionSource(sub.id, candidate.source, candidate.seriesId);
+  }
+
+  // Pull in anything this catalogue has that the other didn't.
+  CubCave.search.allIssuesForSeries(candidate.seriesId, candidate.source)
+    .then(function (issues) {
+      var known = {};
+      entriesInSeries(seriesName).forEach(function (entry) {
+        known[String(issueNumberValue(entry))] = true;
+      });
+
+      var batch = [];
+      var today = todayISO();
+      issues.forEach(function (issue) {
+        var number = String(parseFloat(issue.issueNumber));
+        // Matched on issue number, because the same comic has a different id
+        // in each catalogue.
+        if (!issue.issueNumber || known[number]) return;
+        known[number] = true;
+        batch.push({
+          title: issue.title,
+          series: seriesName,
+          status: (issue.releaseDate && issue.releaseDate > today) ? 'upcoming' : 'next',
+          releaseDate: issue.releaseDate,
+          notes: '',
+          sourceId: candidate.source + ':' + issue.sourceId,
+          coverUrl: issue.coverUrl || '',
+          issueNumber: issue.issueNumber,
+          seriesId: candidate.seriesId,
+          seriesSource: candidate.source
+        });
+      });
+
+      var added = store.addMany(batch);
+      var parts = [];
+      if (watching) parts.push('now watching both databases');
+      parts.push(added
+        ? 'added ' + added + (added === 1 ? ' new issue' : ' new issues')
+        : 'no issues it didn\'t already have');
+      if (!sub) parts.push('follow the series to keep watching both');
+
+      setMatchStatus('Linked — ' + parts.join(', ') + '.');
+      toast('Linked to ' + candidate.seriesName + '.');
+    })
+    .catch(function (err) {
+      setMatchStatus(watching
+        ? 'Linked, but could not fetch its issues now: ' + err.message
+        : 'Could not fetch its issues: ' + err.message);
+    });
+}
+
+document.getElementById('match-close-btn').addEventListener('click', function () {
+  matchDialog.close();
+});
+
+seriesMatchBtn.addEventListener('click', function () {
+  if (openSeries) openMatchDialog(openSeries);
+});
+
+function renderMatchButton() {
+  var gap = openSeries ? missingSourceFor(openSeries) : null;
+  seriesMatchBtn.hidden = !gap;
+  if (gap) seriesMatchBtn.textContent = 'Find on ' + sourceName(gap.want);
+}
+
 function renderFollowing() {
   var subs = store.getSubscriptions();
   followList.textContent = '';
@@ -1178,6 +1341,17 @@ function renderFollowing() {
     var li = el('li', 'follow-item');
     li.appendChild(el('span', 'follow-item__name', sub.seriesName));
     li.appendChild(sourceBadges(sub.sources));
+
+    // Only offered when one catalogue is still missing.
+    var gap = missingSourceFor(sub.seriesName);
+    if (gap) {
+      var find = el('button', 'entry__btn', '+ ' + sourceName(gap.want));
+      find.type = 'button';
+      find.setAttribute('aria-label',
+        'Find ' + sub.seriesName + ' on ' + sourceName(gap.want));
+      find.addEventListener('click', function () { openMatchDialog(sub.seriesName); });
+      li.appendChild(find);
+    }
 
     var remove = el('button', 'entry__btn', 'Unfollow');
     remove.type = 'button';
