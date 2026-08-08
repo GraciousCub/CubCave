@@ -137,10 +137,31 @@
   <button class="status-bar__btn" id="auth-btn" type="button" hidden>Sign in</button>
 </footer>
 
-<!-- Add / edit sheet. <dialog> gives focus trapping and Esc-to-close for free. -->
-<dialog class="sheet" id="entry-dialog" aria-labelledby="dialog-title">
-  <form class="sheet__form" id="entry-form">
-    <h2 class="sheet__title" id="dialog-title">Add an issue</h2>
+<!-- Full-screen issue viewer. <dialog> gives focus trapping and Esc-to-close. -->
+<dialog class="viewer" id="entry-dialog" aria-labelledby="dialog-title">
+  <form class="viewer__form" id="entry-form">
+
+    <header class="viewer__bar">
+      <button class="btn viewer__back" type="button" id="cancel-btn"
+              aria-label="Close without saving">&larr;</button>
+      <h2 class="viewer__heading" id="dialog-title">Add an issue</h2>
+      <button class="btn btn--primary" type="submit" id="save-btn">Save</button>
+    </header>
+
+    <div class="viewer__body">
+      <div class="viewer__art" id="viewer-art"></div>
+      <div class="viewer__summary">
+        <div class="viewer__issue" id="viewer-issue"></div>
+        <div class="viewer__meta" id="viewer-meta"></div>
+      </div>
+    </div>
+
+    <details class="viewer__edit" id="edit-details">
+      <summary class="viewer__edit-summary">
+        <span>Edit details</span>
+        <span class="viewer__chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="viewer__fields">
 
     <label class="field">
       <span class="field__label">Title</span>
@@ -190,12 +211,12 @@
 
     <p class="sheet__error" id="form-error" hidden></p>
 
-    <div class="sheet__actions">
-      <button class="btn btn--danger" type="button" id="delete-btn" hidden>Delete</button>
-      <span class="sheet__spacer"></span>
-      <button class="btn" type="button" id="cancel-btn">Cancel</button>
-      <button class="btn btn--primary" type="submit" id="save-btn">Save</button>
-    </div>
+        <div class="sheet__actions">
+          <button class="btn btn--danger" type="button" id="delete-btn" hidden>Delete</button>
+          <span class="sheet__spacer"></span>
+        </div>
+      </div>
+    </details>
   </form>
 </dialog>
 

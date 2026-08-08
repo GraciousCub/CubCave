@@ -825,6 +825,141 @@ button.tile:active,
 
 .notice__btn[hidden] { display: none; }
 
+/* ---------- full-screen issue viewer ---------- */
+
+/* The cover is the point, so this takes the whole screen and the form folds
+   away underneath it. */
+.viewer {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.viewer::backdrop { background: var(--bg); }
+
+.viewer__form {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.viewer__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: calc(var(--safe-top) + 12px) 14px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.viewer__back {
+  min-width: 40px;
+  padding: 0 12px;
+  font-size: 17px;
+}
+
+.viewer__heading {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 16px;
+}
+
+.viewer__art {
+  width: min(70vw, 280px);
+  flex-shrink: 0;
+  aspect-ratio: 2 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-hover);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+}
+
+.viewer__art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.viewer__art .tile__fallback { font-size: 54px; }
+
+.viewer__summary { text-align: center; }
+
+.viewer__issue {
+  font-size: 19px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.viewer__meta {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- collapsible edit panel ---------- */
+
+.viewer__edit {
+  flex-shrink: 0;
+  border-top: 1px solid var(--line);
+  background: var(--bg-raised);
+}
+
+.viewer__edit-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  /* Hides the default triangle in both engines. */
+  list-style: none;
+}
+
+.viewer__edit-summary::-webkit-details-marker { display: none; }
+
+.viewer__chevron {
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+}
+
+.viewer__edit[open] .viewer__chevron { transform: rotate(180deg); }
+
+.viewer__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 16px calc(var(--safe-bottom) + 18px);
+  /* The panel must not push the cover off screen entirely. */
+  max-height: 58vh;
+  overflow-y: auto;
+}
+
 /* ---------- add / edit sheet ---------- */
 
 /* Bottom sheet on phones: thumb-reachable, and it doesn't fight the keyboard. */

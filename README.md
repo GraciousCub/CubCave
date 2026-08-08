@@ -428,6 +428,21 @@ results have covers from both sources.
 
 Entries with no series are grouped under **Other**.
 
+### The issue viewer
+
+Tapping an issue opens a **full-screen view**: a large cover, the issue name,
+and a line of context (series, and either its release date or when you read
+it). **Save** sits in the top bar so it's always reachable; the back arrow
+leaves without saving.
+
+The form lives in an **Edit details** panel at the bottom, collapsed by default
+so an existing issue is something you look at rather than a form you have to
+read past. A new issue opens with it already expanded, since there's nothing to
+look at yet. Delete is inside the panel.
+
+Picking a search result updates the big cover straight away rather than only
+after saving.
+
 Covers come from the comic database and are hotlinked, so they need a
 connection. When one is missing or fails to load, the tile falls back to the
 series initials rather than showing a broken image.

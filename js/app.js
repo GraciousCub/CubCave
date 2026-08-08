@@ -754,6 +754,45 @@ var fNotes = document.getElementById('f-notes');
 var formError = document.getElementById('form-error');
 var deleteBtn = document.getElementById('delete-btn');
 var dialogTitle = document.getElementById('dialog-title');
+var viewerArt = document.getElementById('viewer-art');
+var viewerIssue = document.getElementById('viewer-issue');
+var viewerMeta = document.getElementById('viewer-meta');
+var editDetails = document.getElementById('edit-details');
+
+/* The big cover, plus what the issue is, above the collapsed form. Called
+ * again when a search result is picked so the art appears straight away
+ * rather than only after saving. */
+function renderViewer(entry) {
+  var cover = entry ? entry.coverUrl : (pendingFromSearch && pendingFromSearch.coverUrl);
+  var label = (entry && (entry.series || entry.title)) || fSeries.value || fTitle.value;
+
+  viewerArt.textContent = '';
+  viewerArt.appendChild(artElement(cover || '', label || '?'));
+
+  var title = (entry && entry.title) || fTitle.value.trim();
+  viewerIssue.textContent = title || 'New issue';
+
+  var bits = [];
+  var series = (entry && entry.series) || fSeries.value.trim();
+  if (series) bits.push(series);
+
+  var status = (entry && entry.status) || fStatus.value;
+  var release = (entry && entry.releaseDate) || fRelease.value;
+
+  // One statement per idea: "Read 5 Jul 2026" already says it's read, so the
+  // status label and the release date would just be noise beside it.
+  if (status === 'read') {
+    bits.push(entry && entry.dateRead
+      ? 'Read ' + formatTimestamp(entry.dateRead) : 'Read');
+  } else if (status === 'upcoming' && release) {
+    bits.push(describeRelease(release).text);
+  } else {
+    bits.push(LIST_LABELS[status]);
+    if (release) bits.push(formatDay(release));
+  }
+
+  viewerMeta.textContent = bits.join(' · ');
+}
 
 var editingId = null;
 
@@ -933,6 +972,8 @@ function applySuggestion(item) {
 
   CubCave.search.cancel();
   hideSuggestions();
+  // Show the picked issue's cover at full size straight away.
+  renderViewer(null);
 
   var note = item.releaseDate
     ? (item.dateIsApproximate ? 'Filled in — date is a cover date, worth checking.' : 'Filled in from the comic database.')
@@ -997,10 +1038,16 @@ function openForm(entry) {
   fStatus.value = entry ? entry.status : currentTab();
 
   syncReleaseVisibility();
+  renderViewer(entry);
+
+  /* A new issue needs the form immediately; an existing one is here to be
+   * looked at, so the cover gets the screen until you ask to edit. */
+  editDetails.open = !entry;
+
   dialog.showModal();
 
-  // Don't autofocus on touch — it yanks the keyboard up over the sheet.
-  if (!window.matchMedia('(pointer: coarse)').matches) fTitle.focus();
+  // Don't autofocus on touch — it yanks the keyboard up over the form.
+  if (!entry && !window.matchMedia('(pointer: coarse)').matches) fTitle.focus();
 }
 
 form.addEventListener('submit', function (event) {
