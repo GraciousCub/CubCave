@@ -58,7 +58,9 @@ let tokenStatus = 200;
 let tokenBody = { access_token: 'fake-access-token', expires_in: 3600 };
 let driveListStatus = 200;
 let metronIssues = [];
+let comicVineIssues = [];
 let metronFails = false;
+process.env.COMICVINE_API_KEY = 'test-cv-key';
 const calls = [];
 const writes = [];
 
@@ -77,6 +79,10 @@ global.fetch = async (url, options = {}) => {
   if (url.includes('metron.cloud')) {
     if (metronFails) return json({ detail: 'boom' }, 500);
     return json({ count: metronIssues.length, results: metronIssues });
+  }
+
+  if (url.includes('comicvine.gamespot.com')) {
+    return json({ error: 'OK', results: comicVineIssues });
   }
 
   if (url.includes('/upload/drive/v3/files/')) {
@@ -274,6 +280,88 @@ const device = (t, label) => ({ fcmToken: t, label, registeredAt: '2026-08-01T00
   const res17 = await run({ date: '2026-08-07', dryRun: '1' });
   show('dryRunNeverWrites', { wroteToDrive: writes.length, dryRun: res17.body.dryRun });
   metronIssues = [];
+
+  /* ---- a series watched in BOTH catalogues ---- */
+
+  const cvIssue = (id, number, storeDate) => ({
+    id, issue_number: number, name: '',
+    store_date: storeDate, cover_date: storeDate,
+    volume: { id: 160294, name: 'Batman' },
+    image: { thumb_url: 'https://cv.test/' + id + '.jpg' }
+  });
+  const bothSources = (entries = []) => ({
+    entries,
+    pushSubscriptions: [device('tok-a', 'Phone')],
+    subscriptions: [{
+      id: 's1', seriesName: 'Batman (2025)',
+      sources: [
+        { source: 'metron', seriesId: '12829' },
+        { source: 'comicvine', seriesId: '160294' }
+      ]
+    }]
+  });
+
+  // 18. The SAME issue in both catalogues must be added once, not twice
+  writes.length = 0;
+  driveFile = bothSources([]);
+  metronIssues = [metronIssue(999, '13', '2026-09-02')];
+  comicVineIssues = [cvIssue(555, '13', '2026-09-02')];
+  const res18 = await run({ date: '2026-08-07' });
+  show('sameIssueBothSourcesAddedOnce', {
+    autoAdded: res18.body.autoAdded,
+    written: writes[0] && writes[0].entries.map((e) => ({
+      t: e.title, n: e.issueNumber, src: e.sourceId, series: e.series }))
+  });
+
+  // 19. An issue only one catalogue knows about is still picked up
+  writes.length = 0;
+  driveFile = bothSources([]);
+  metronIssues = [];
+  comicVineIssues = [cvIssue(556, '14', '2026-09-30')];
+  const res19 = await run({ date: '2026-08-07' });
+  show('comicVineOnlyIssueStillAdded', {
+    autoAdded: res19.body.autoAdded,
+    source: writes[0] && writes[0].entries[0].sourceId
+  });
+
+  // 20. Issues from both land under ONE series name, not two
+  writes.length = 0;
+  driveFile = bothSources([]);
+  metronIssues = [metronIssue(999, '13', '2026-09-02')];
+  comicVineIssues = [cvIssue(556, '14', '2026-09-30')];
+  const res20 = await run({ date: '2026-08-07' });
+  show('bothSourcesShareOneSeries', {
+    autoAdded: res20.body.autoAdded,
+    seriesNames: writes[0] && [...new Set(writes[0].entries.map((e) => e.series))]
+  });
+
+  // 21. Already tracked from one source -> the other must not re-add it
+  writes.length = 0;
+  driveFile = bothSources([{
+    id: 'x', title: 'Batman #13', series: 'Batman (2025)', status: 'upcoming',
+    releaseDate: '2026-09-02', notes: '', dateAdded: '2026-08-07T00:00:00Z',
+    dateRead: null, sortOrder: 0, sourceId: 'metron:999', issueNumber: '13'
+  }]);
+  metronIssues = [metronIssue(999, '13', '2026-09-02')];
+  comicVineIssues = [cvIssue(555, '13', '2026-09-02')];
+  const res21 = await run({ date: '2026-08-07' });
+  show('crossSourceDuplicateBlocked', {
+    autoAdded: res21.body.autoAdded, wroteToDrive: writes.length });
+
+  // 22. Legacy single-source subscriptions still work
+  writes.length = 0;
+  driveFile = {
+    entries: [],
+    pushSubscriptions: [device('tok-a', 'Phone')],
+    subscriptions: [{ id: 's1', source: 'metron', seriesId: '12829', seriesName: 'Batman (2025)' }]
+  };
+  metronIssues = [metronIssue(999, '13', '2026-09-02')];
+  comicVineIssues = [];
+  const res22 = await run({ date: '2026-08-07' });
+  show('legacySubscriptionShape', { autoAdded: res22.body.autoAdded });
+
+  metronIssues = [];
+  comicVineIssues = [];
 
   // 11. Timezone correctness — the date used must be London's, not UTC's
   const londonToday = new Intl.DateTimeFormat('en-CA', {

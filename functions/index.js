@@ -140,6 +140,24 @@ async function writeDataFile(accessToken, fileId, data) {
   return response.json();
 }
 
+/* Issue numbers are the only thing both databases agree on, so they're what
+ * stops the same comic being added twice when a series is watched in both. */
+function issueNumberOf(entry) {
+  if (entry.issueNumber) return String(entry.issueNumber).trim();
+  const match = String(entry.title || '').match(/#\s*([0-9]+(?:\.[0-9]+)?)/);
+  return match ? match[1] : '';
+}
+
+function issueKey(seriesName, number) {
+  return `${normaliseText(seriesName)}#${String(number || '').trim().toLowerCase()}`;
+}
+
+// Old single-source subscriptions still have to work.
+function sourcesOf(sub) {
+  if (Array.isArray(sub.sources) && sub.sources.length) return sub.sources;
+  return sub.seriesId ? [{ source: sub.source || 'metron', seriesId: sub.seriesId }] : [];
+}
+
 async function collectSubscriptionAdditions(data, today) {
   const subscriptions = Array.isArray(data.subscriptions) ? data.subscriptions : [];
   if (!subscriptions.length) return { additions: [], checked: 0 };
@@ -147,43 +165,62 @@ async function collectSubscriptionAdditions(data, today) {
   const entries = Array.isArray(data.entries) ? data.entries : [];
   const knownSourceIds = new Set(entries.map((e) => e && e.sourceId).filter(Boolean));
 
-  // Also match on title + date, so an issue added by hand before the database
-  // knew about it doesn't come back as a duplicate.
-  const knownTitles = new Set(
-    entries.map((e) => `${normaliseText(e && e.title)}|${(e && e.releaseDate) || ''}`)
+  /* Keyed on series + issue number rather than the database's own id, because
+   * the same comic has different ids in each catalogue. Without this, watching
+   * both sources would add every issue twice. */
+  const knownIssues = new Set(
+    entries.map((e) => issueKey(e && e.series, issueNumberOf(e || {})))
   );
 
   const additions = [];
   let checked = 0;
 
   for (const sub of subscriptions) {
-    try {
-      const issues = await metronSeriesIssues(sub.seriesId, today);
-      checked += 1;
+    for (const link of sourcesOf(sub)) {
+      try {
+        const issues = link.source === 'comicvine'
+          ? await comicVineVolumeIssues(link.seriesId, today)
+          : await metronSeriesIssues(link.seriesId, today);
+        checked += 1;
 
-      issues.forEach((issue) => {
-        const sourceId = `metron:${issue.sourceId}`;
-        if (knownSourceIds.has(sourceId)) return;
-        if (knownTitles.has(`${normaliseText(issue.title)}|${issue.releaseDate || ''}`)) return;
-        if (!issue.releaseDate) return;   // nothing to notify on
+        issues.forEach((issue) => {
+          const sourceId = `${link.source}:${issue.sourceId}`;
+          if (!issue.releaseDate) return;              // nothing to notify on
+          if (knownSourceIds.has(sourceId)) return;
 
-        knownSourceIds.add(sourceId);
-        additions.push({
-          id: `sub-${issue.sourceId}-${Date.now()}`,
-          title: issue.title,
-          series: issue.series,
-          status: 'upcoming',
-          releaseDate: issue.releaseDate,
-          notes: `Added automatically from ${sub.seriesName}.`,
-          dateAdded: new Date().toISOString(),
-          dateRead: null,
-          sortOrder: 0,
-          sourceId
+          const number = issueNumberOf(issue);
+          /* Filed under the name you follow it by, not whatever this
+           * particular database calls it — so issues from both sources group
+           * into one series. */
+          const key = issueKey(sub.seriesName, number);
+          if (knownIssues.has(key)) return;
+
+          knownSourceIds.add(sourceId);
+          knownIssues.add(key);
+
+          additions.push({
+            id: `sub-${link.source}-${issue.sourceId}-${Date.now()}`,
+            title: issue.title,
+            series: sub.seriesName,
+            status: 'upcoming',
+            releaseDate: issue.releaseDate,
+            notes: `Added automatically from ${sub.seriesName}.`,
+            dateAdded: new Date().toISOString(),
+            dateRead: null,
+            sortOrder: 0,
+            sourceId,
+            coverUrl: issue.coverUrl || '',
+            issueNumber: number,
+            seriesId: link.seriesId,
+            seriesSource: link.source
+          });
         });
-      });
-    } catch (err) {
-      // One bad series must not stop the rest, nor the notification run.
-      console.warn(`Could not check followed series "${sub.seriesName}":`, err.message);
+      } catch (err) {
+        // One bad source must not stop the other, nor the notification run.
+        console.warn(
+          `Could not check "${sub.seriesName}" on ${link.source}:`, err.message
+        );
+      }
     }
   }
 
@@ -634,6 +671,85 @@ function rankResults(items, parsed) {
     .map((scored) => scored.item);
 }
 
+/* ---------- linking the two databases ----------
+ *
+ * Metron records the Comic Vine id of each series it mirrors, and can be
+ * queried by it. That makes the link authoritative in both directions — no
+ * guessing from names, which would eventually pair the wrong "Batman".
+ *
+ * Following a series therefore watches BOTH catalogues, so an issue announced
+ * in either one is picked up.
+ */
+
+async function metronSeriesDetail(seriesId) {
+  if (!METRON_TOKEN) return null;
+  return fetchJson(
+    `https://metron.cloud/api/series/${encodeURIComponent(seriesId)}/`,
+    { Authorization: `Bearer ${METRON_TOKEN}`, Accept: 'application/json',
+      'User-Agent': USER_AGENT },
+    'Metron'
+  );
+}
+
+async function metronSeriesByCvId(cvId) {
+  if (!METRON_TOKEN) return null;
+  const body = await fetchJson(
+    `https://metron.cloud/api/series/?cv_id=${encodeURIComponent(cvId)}`,
+    { Authorization: `Bearer ${METRON_TOKEN}`, Accept: 'application/json',
+      'User-Agent': USER_AGENT },
+    'Metron'
+  );
+  const first = (body.results || [])[0];
+  return first ? {
+    source: 'metron',
+    seriesId: String(first.id),
+    seriesName: first.series || first.name || '',
+    issueCount: first.issue_count || 0,
+    coverUrl: ''
+  } : null;
+}
+
+async function comicVineVolume(volumeId) {
+  if (!COMICVINE_KEY) return null;
+  // 4050 is Comic Vine's resource prefix for a volume.
+  const url = `https://comicvine.gamespot.com/api/volume/4050-${encodeURIComponent(volumeId)}/?` +
+    new URLSearchParams({
+      api_key: COMICVINE_KEY,
+      format: 'json',
+      field_list: 'id,name,start_year,count_of_issues,image'
+    });
+
+  const body = await fetchJson(
+    url, { 'User-Agent': USER_AGENT, Accept: 'application/json' }, 'Comic Vine'
+  );
+  const volume = body.results;
+  if (!volume || !volume.id) return null;
+
+  return {
+    source: 'comicvine',
+    seriesId: String(volume.id),
+    seriesName: volume.start_year
+      ? `${volume.name} (${volume.start_year})`
+      : String(volume.name || ''),
+    issueCount: volume.count_of_issues || 0,
+    coverUrl: (volume.image && (volume.image.thumb_url || volume.image.icon_url)) || ''
+  };
+}
+
+async function linkSeries(source, seriesId) {
+  if (source === 'metron') {
+    const detail = await metronSeriesDetail(seriesId);
+    if (!detail || !detail.cv_id) return null;
+    // Fall back to the bare id if the volume lookup fails — the id is still
+    // enough to watch the series.
+    return (await comicVineVolume(detail.cv_id).catch(() => null)) || {
+      source: 'comicvine', seriesId: String(detail.cv_id), seriesName: '', issueCount: 0, coverUrl: ''
+    };
+  }
+  if (source === 'comicvine') return metronSeriesByCvId(seriesId);
+  return null;
+}
+
 /* Same issue from both sources: keep Metron's, which has the better date. */
 function dedupe(items) {
   const seen = new Map();
@@ -694,6 +810,18 @@ functions.http('comicSearch', async (req, res) => {
 
     // Following a series: find series to follow, or list what's forthcoming
     // in one already followed.
+    // Find the same series in the other database.
+    if (mode === 'link') {
+      if (!seriesId || !source) {
+        return res.status(400).json({ error: 'link needs seriesId and source', results: [] });
+      }
+      const counterpart = await linkSeries(source, seriesId);
+      const results = counterpart ? [counterpart] : [];
+      cacheSet(searchCache, key, results);
+      res.set('X-Cache', 'miss');
+      return res.status(200).json({ results });
+    }
+
     if (mode === 'series') {
       const series = source === 'comicvine'
         ? await searchComicVineSeries(query)

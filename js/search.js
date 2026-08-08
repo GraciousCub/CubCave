@@ -214,6 +214,21 @@ CubCave.search = (function () {
     onInput: onInput,
     upcomingForSeries: upcomingForSeries,
     allIssuesForSeries: allIssuesForSeries,
+    // The same series in the other catalogue, via Metron's recorded Comic
+    // Vine id. Resolves to null when there's no counterpart.
+    linkSeries: function (seriesId, source) {
+      var token = CubCave.drive.currentAccessToken();
+      if (!token) return Promise.reject(new Error('Sign in first.'));
+      return fetch(endpointUrl({ type: 'link', seriesId: seriesId, source: source }), {
+        headers: { Authorization: 'Bearer ' + token }
+      }).then(function (r) {
+        return r.json().then(function (b) {
+          if (!r.ok) throw new Error(b.error || 'Link lookup failed.');
+          return (b.results || [])[0] || null;
+        });
+      });
+    },
+
     seriesByName: function (name, source) {
       var token = CubCave.drive.currentAccessToken();
       if (!token) return Promise.reject(new Error('Sign in first.'));

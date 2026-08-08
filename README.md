@@ -40,10 +40,24 @@ opens instantly and keeps working offline.
   (nothing you typed is discarded); if clean, Drive is pulled down (so another
   device's changes appear).
 
-**Known limitation:** last-write-wins. Editing on device A while offline, then
-editing device B, then bringing A back online means A overwrites B. With one
-person using one device at a time this can't really happen — it's documented
-rather than engineered around.
+### Signing in never guesses
+
+When you sign in, the account's copy is read and compared with the device's
+before anything is written. Only when **both** hold data and they differ are you
+asked which to keep, with a count of each side and when it last changed. Every
+other case has one obvious answer and is taken silently: an empty device pulls,
+an empty account is pushed to, identical contents do nothing.
+
+This replaced an earlier rule — "if the device has unsaved changes, the device
+wins" — that could **wipe an account**. The dirty flag is set by any local
+write, including the notification-token refresh that runs on launch, so a device
+with no data could mark itself dirty and then push nothing over everything. That
+is the bug behind data vanishing after signing in on an empty device.
+
+**Known limitation:** still last-write-wins *after* sign-in. Editing on device A
+while offline, then editing device B, then bringing A back online means A
+overwrites B. With one person using one device at a time this can't really
+happen — it's documented rather than engineered around.
 
 The Drive file is `cubcave-data.json` in the **appDataFolder**: a hidden,
 per-app folder. It does not show up in your normal Drive, and no other app can
@@ -463,6 +477,25 @@ even when the database doesn't know about it yet.
 
 Following is by **series id**, not name, so "Batman (2025)" can never drift into
 matching "Batman (1940)".
+
+### Watching both catalogues
+
+Following a series links it to **the same series in the other database**, and
+the daily check then watches both. An issue announced in either one is picked
+up — useful because their coverage differs: at the time of writing Metron listed
+23 issues of *Absolute Batman* and Comic Vine 22.
+
+The link is authoritative, not guesswork: Metron records the Comic Vine id of
+each series it mirrors (`cv_id`) and can be queried by it, so the pairing works
+in both directions without ever matching on names — which would eventually pair
+the wrong *Batman*.
+
+**Duplicates are prevented by issue number, not database id**, since the same
+comic has a different id in each catalogue. Issues are filed under the name you
+follow the series by, so both sources land in one series rather than two.
+
+The logos beside a series — in the Following list and at the top of the series
+view — show which catalogues it's tracked in. Two logos means both.
 
 **Two things check for new issues:**
 

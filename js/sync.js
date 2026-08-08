@@ -35,6 +35,15 @@ CubCave.sync = (function () {
   var pushTimer = null;
   var busy = false;
 
+  /* Set by the UI. Given a summary of both sides, resolves to 'local' or
+   * 'remote'. Until one is registered, the account always wins — losing the
+   * copy you can't see is worse than losing the one you can. */
+  var conflictHandler = null;
+
+  function onConflict(fn) {
+    conflictHandler = fn;
+  }
+
   /* ---------- status ---------- */
 
   function onStatus(fn) {
@@ -108,6 +117,95 @@ CubCave.sync = (function () {
       .then(function () { busy = false; });
   }
 
+  /* ---------- signing in ----------
+   *
+   * Signing in must never silently pick a winner. The old rule — "dirty means
+   * local wins" — could wipe an account: `dirty` is set by any local write,
+   * including the notification-token refresh that runs on launch, so an empty
+   * device could mark itself dirty and then push nothing over everything.
+   *
+   * Now the remote document is read first and compared. A choice is only put
+   * to you when both sides genuinely hold data and they differ; every other
+   * case has an obviously correct answer and is taken automatically.
+   */
+
+  function hasContent(doc) {
+    if (!doc) return false;
+    var entries = doc.entries || [];
+    var subs = doc.subscriptions || [];
+    return entries.length > 0 || subs.length > 0;
+  }
+
+  /* Both sides go through normalize first, so key order and missing optional
+   * fields can't make identical data look different. updatedAt is left out
+   * deliberately — it always differs and says nothing about the contents. */
+  function contentOf(doc) {
+    var clean = store.normalizeDoc(doc);
+    return JSON.stringify({
+      entries: clean.entries,
+      subscriptions: clean.subscriptions,
+      seriesOrder: clean.seriesOrder
+    });
+  }
+
+  function summarise(doc) {
+    var entries = (doc && doc.entries) || [];
+    var series = {};
+    entries.forEach(function (e) {
+      series[(e && e.series) || 'Other'] = true;
+    });
+    return {
+      entries: entries.length,
+      series: Object.keys(series).length,
+      subscriptions: ((doc && doc.subscriptions) || []).length,
+      updatedAt: (doc && doc.updatedAt) || null
+    };
+  }
+
+  function applyRemote(remote) {
+    store.replaceAll(remote);
+    setDirty(false);
+    setStatus('synced', 'Loaded from Drive');
+  }
+
+  function afterSignIn() {
+    if (busy) return Promise.resolve();
+    busy = true;
+    setStatus('syncing', 'Checking your Drive…');
+
+    return drive.read().then(function (result) {
+      var remote = result && result.data;
+      var local = store.snapshot();
+      busy = false;
+
+      // Nothing in Drive yet: this account's first run.
+      if (!remote) return push();
+
+      // One side empty — no decision to make.
+      if (!hasContent(local)) { applyRemote(remote); return; }
+      if (!hasContent(remote)) return push();
+
+      // Same contents, just different timestamps.
+      if (contentOf(local) === contentOf(remote)) { applyRemote(remote); return; }
+
+      // Genuine conflict. Without a handler, prefer the account — never
+      // destroy the copy that isn't in front of you.
+      if (!conflictHandler) { applyRemote(remote); return; }
+
+      setStatus('conflict', 'Two versions of your data');
+      return conflictHandler({
+        local: summarise(local),
+        remote: summarise(remote)
+      }).then(function (choice) {
+        if (choice === 'local') return push();
+        applyRemote(remote);
+      });
+    }).catch(function (err) {
+      busy = false;
+      fail(err);
+    });
+  }
+
   function pull() {
     if (busy) return Promise.resolve();
     busy = true;
@@ -176,10 +274,10 @@ CubCave.sync = (function () {
   function signIn() {
     setStatus('syncing', 'Signing in…');
     return drive.signIn()
-      .then(reconcile)
-      .catch(function (err) {
+      .then(afterSignIn)
+      .catch(function () {
         // A silent grant can fail simply because none exists yet; ask properly.
-        return drive.reauthorize().then(reconcile).catch(fail);
+        return drive.reauthorize().then(afterSignIn).catch(fail);
       });
   }
 
@@ -252,6 +350,7 @@ CubCave.sync = (function () {
     start: start,
     status: status,
     onStatus: onStatus,
+    onConflict: onConflict,
     signIn: signIn,
     signOut: signOut,
     reconcile: reconcile,

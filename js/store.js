@@ -139,12 +139,33 @@ CubCave.store = (function () {
 
     if (Array.isArray(parsed.subscriptions)) {
       clean.subscriptions = parsed.subscriptions
-        .filter(function (s) { return s && s.seriesId != null; })
+        .filter(function (s) {
+          return s && (s.seriesId != null || (Array.isArray(s.sources) && s.sources.length));
+        })
         .map(function (s) {
+          /* A followed series can be watched in both catalogues at once, so
+           * sources is a list. Documents written before that still have a
+           * single seriesId/source pair — migrate them. */
+          var sources = Array.isArray(s.sources)
+            ? s.sources.filter(function (x) { return x && x.seriesId != null; })
+                .map(function (x) {
+                  return {
+                    source: typeof x.source === 'string' ? x.source : 'metron',
+                    seriesId: String(x.seriesId)
+                  };
+                })
+            : [];
+
+          if (!sources.length && s.seriesId != null) {
+            sources = [{
+              source: typeof s.source === 'string' ? s.source : 'metron',
+              seriesId: String(s.seriesId)
+            }];
+          }
+
           return {
             id: typeof s.id === 'string' && s.id ? s.id : uid(),
-            source: typeof s.source === 'string' ? s.source : 'metron',
-            seriesId: String(s.seriesId),
+            sources: sources,
             seriesName: typeof s.seriesName === 'string' ? s.seriesName : 'Unknown series',
             addedAt: typeof s.addedAt === 'string' ? s.addedAt : nowISO(),
             lastCheckedAt: typeof s.lastCheckedAt === 'string' ? s.lastCheckedAt : null
@@ -535,8 +556,15 @@ CubCave.store = (function () {
 
   function isSubscribed(seriesId) {
     return data.subscriptions.some(function (s) {
-      return s.seriesId === String(seriesId);
+      return s.sources.some(function (x) { return x.seriesId === String(seriesId); });
     });
+  }
+
+  function subscriptionByName(seriesName) {
+    for (var i = 0; i < data.subscriptions.length; i++) {
+      if (data.subscriptions[i].seriesName === seriesName) return data.subscriptions[i];
+    }
+    return null;
   }
 
   function addSubscription(fields) {
@@ -545,8 +573,7 @@ CubCave.store = (function () {
 
     var sub = {
       id: uid(),
-      source: fields.source || 'metron',
-      seriesId: String(fields.seriesId),
+      sources: [{ source: fields.source || 'metron', seriesId: String(fields.seriesId) }],
       seriesName: String(fields.seriesName || 'Unknown series'),
       addedAt: nowISO(),
       lastCheckedAt: null
@@ -554,6 +581,23 @@ CubCave.store = (function () {
     data.subscriptions.push(sub);
     changed();
     return sub;
+  }
+
+  /* Attach the same series in the other catalogue, so an issue announced in
+   * either one gets picked up. */
+  function addSubscriptionSource(subscriptionId, source, seriesId) {
+    var sub = null;
+    data.subscriptions.forEach(function (s) { if (s.id === subscriptionId) sub = s; });
+    if (!sub || seriesId == null) return false;
+
+    var exists = sub.sources.some(function (x) {
+      return x.source === source && x.seriesId === String(seriesId);
+    });
+    if (exists) return false;
+
+    sub.sources.push({ source: source, seriesId: String(seriesId) });
+    changed();
+    return true;
   }
 
   function removeSubscription(id) {
@@ -615,6 +659,9 @@ CubCave.store = (function () {
     STATUSES: STATUSES,
     load: load,
     saveNow: saveNow,
+    // Pure: cleans a document into the canonical shape without touching state.
+    // Lets two documents be compared without key order mattering.
+    normalizeDoc: normalize,
     subscribe: subscribe,
     onLocalChange: onLocalChange,
     snapshot: snapshot,
@@ -637,7 +684,9 @@ CubCave.store = (function () {
     removeSeries: removeSeries,
     getSubscriptions: getSubscriptions,
     isSubscribed: isSubscribed,
+    subscriptionByName: subscriptionByName,
     addSubscription: addSubscription,
+    addSubscriptionSource: addSubscriptionSource,
     removeSubscription: removeSubscription,
     hasSourceId: hasSourceId,
     getPushSubscriptions: getPushSubscriptions,

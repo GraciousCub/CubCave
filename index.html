@@ -230,6 +230,30 @@
   </div>
 </dialog>
 
+<!-- Shown only when this device and the account both hold data and they differ. -->
+<dialog class="sheet" id="merge-dialog" aria-labelledby="merge-title">
+  <div class="sheet__form">
+    <h2 class="sheet__title" id="merge-title">Which copy do you want to keep?</h2>
+    <p class="field__hint">
+      This device and your Google account both have data, and they don&rsquo;t
+      match. Nothing has been changed yet &mdash; whichever you don&rsquo;t
+      choose is replaced.
+    </p>
+
+    <button class="merge-option" type="button" id="keep-remote-btn">
+      <span class="merge-option__label">Keep the account&rsquo;s data</span>
+      <span class="merge-option__meta" id="remote-summary"></span>
+      <span class="merge-option__note">Replaces what&rsquo;s on this device</span>
+    </button>
+
+    <button class="merge-option" type="button" id="keep-local-btn">
+      <span class="merge-option__label">Keep this device&rsquo;s data</span>
+      <span class="merge-option__meta" id="local-summary"></span>
+      <span class="merge-option__note">Replaces what&rsquo;s in your account</span>
+    </button>
+  </div>
+</dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <!-- Google Identity Services: issues the OAuth access token for Drive. -->

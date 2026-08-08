@@ -475,12 +475,32 @@ seriesFollowBtn.addEventListener('click', function () {
 
   var identity = seriesIdentity(openSeries);
   if (!identity) return;
-  store.addSubscription({
+
+  var sub = store.addSubscription({
     source: identity.source,
     seriesId: identity.seriesId,
     seriesName: openSeries
   });
+  if (!sub) return;
+
   toast('Following ' + openSeries + ' — new issues will be added automatically.');
+
+  /* Attach the same series in the other catalogue so an issue announced in
+   * either one is picked up. Best effort: the follow already works with one
+   * source, so a failure here is not worth bothering you about. */
+  CubCave.search.linkSeries(identity.seriesId, identity.source)
+    .then(function (counterpart) {
+      if (!counterpart) return;
+      var added = store.addSubscriptionSource(
+        sub.id, counterpart.source, counterpart.seriesId);
+      if (added) {
+        toast('Also watching ' + openSeries + ' on ' +
+              (counterpart.source === 'metron' ? 'Metron' : 'Comic Vine') + '.');
+      }
+    })
+    .catch(function (err) {
+      console.warn('Could not link the other database:', err.message);
+    });
 });
 
 function openSeriesView(name) {
@@ -543,6 +563,26 @@ function renderSeriesView() {
   }
 
   seriesViewTitle.textContent = openSeries;
+
+  /* Which catalogues this series is known in: the ones it's followed in if
+   * it's followed, otherwise wherever its issues were imported from. */
+  var sub = store.subscriptionByName(openSeries);
+  var shown = sub ? sub.sources : (function () {
+    var seen = {};
+    return issues
+      .filter(function (e) { return e.seriesSource && e.seriesId; })
+      .filter(function (e) {
+        if (seen[e.seriesSource]) return false;
+        seen[e.seriesSource] = true;
+        return true;
+      })
+      .map(function (e) { return { source: e.seriesSource, seriesId: e.seriesId }; });
+  })();
+
+  var existing = seriesViewTitle.parentNode.querySelector('.source-badges');
+  if (existing) existing.remove();
+  if (shown.length) seriesViewTitle.parentNode.insertBefore(
+    sourceBadges(shown), seriesViewMeta);
 
   var counts = {};
   issues.forEach(function (e) { counts[e.status] = (counts[e.status] || 0) + 1; });
@@ -726,10 +766,12 @@ var pendingFromSearch = null;
  * back catalogue. Left unset, the server tries Metron and falls back — the
  * toggle pins it to one so you can tell where a result came from. */
 var SOURCES = [
-  { id: '', label: 'Auto', title: 'Metron, falling back to Comic Vine', icon: null },
-  { id: 'metron', label: 'M', title: 'Metron only', icon: 'https://metron.cloud/favicon.ico' },
-  { id: 'comicvine', label: 'CV', title: 'Comic Vine only',
-    icon: 'https://comicvine.gamespot.com/favicon.ico' }
+  { id: '', name: 'Auto', label: 'Auto',
+    title: 'Metron, falling back to Comic Vine', icon: null },
+  { id: 'metron', name: 'Metron', label: 'M',
+    title: 'Metron only', icon: 'https://metron.cloud/favicon.ico' },
+  { id: 'comicvine', name: 'Comic Vine', label: 'CV',
+    title: 'Comic Vine only', icon: 'https://comicvine.gamespot.com/favicon.ico' }
 ];
 
 var activeSource = '';
@@ -1081,6 +1123,41 @@ var seriesSuggest = document.getElementById('series-suggest');
 var seriesStatus = document.getElementById('series-status');
 var backfillBtn = document.getElementById('backfill-btn');
 
+/* Small logo strip showing which catalogues a series is watched in. Uses the
+ * same favicons as the source toggle, with a monogram fallback. */
+function sourceBadges(sources) {
+  var strip = el('span', 'source-badges');
+
+  (sources || []).forEach(function (link) {
+    var meta = SOURCES.filter(function (s) { return s.id === link.source; })[0];
+    if (!meta) return;
+
+    // "Tracked on Metron", not the toggle's "Metron only".
+    var caption = 'Tracked on ' + meta.name;
+    var badge = el('span', 'source-badges__item');
+    badge.title = caption;
+    badge.setAttribute('aria-label', caption);
+
+    if (meta.icon) {
+      var img = document.createElement('img');
+      img.alt = '';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', function () {
+        img.remove();
+        badge.appendChild(el('span', 'source-badges__text', meta.label));
+      });
+      img.src = meta.icon;
+      badge.appendChild(img);
+    } else {
+      badge.appendChild(el('span', 'source-badges__text', meta.label));
+    }
+
+    strip.appendChild(badge);
+  });
+
+  return strip;
+}
+
 function renderFollowing() {
   var subs = store.getSubscriptions();
   followList.textContent = '';
@@ -1100,6 +1177,7 @@ function renderFollowing() {
   subs.forEach(function (sub) {
     var li = el('li', 'follow-item');
     li.appendChild(el('span', 'follow-item__name', sub.seriesName));
+    li.appendChild(sourceBadges(sub.sources));
 
     var remove = el('button', 'entry__btn', 'Unfollow');
     remove.type = 'button';
@@ -1643,6 +1721,43 @@ store.subscribe(renderFollowing);
 // rotate, and a stale one means alerts stop arriving with no visible symptom.
 // Deferred so it never competes with first paint.
 setTimeout(function () { CubCave.push.refreshIfEnabled(); }, 1500);
+
+/* Signing in when both sides hold different data asks rather than guessing.
+ * The dialog has no cancel: leaving it unanswered would leave the app in a
+ * half-signed-in state, and both options are non-destructive to the copy you
+ * pick. */
+CubCave.sync.onConflict(function (info) {
+  var describe = function (side) {
+    var parts = [side.entries + (side.entries === 1 ? ' issue' : ' issues')];
+    if (side.series) parts.push(side.series + (side.series === 1 ? ' series' : ' series'));
+    if (side.subscriptions) parts.push(side.subscriptions + ' followed');
+    if (side.updatedAt) {
+      var when = new Date(side.updatedAt);
+      if (!isNaN(when)) parts.push('last changed ' + formatTimestamp(side.updatedAt));
+    }
+    return parts.join(' · ');
+  };
+
+  document.getElementById('remote-summary').textContent = describe(info.remote);
+  document.getElementById('local-summary').textContent = describe(info.local);
+
+  var dialog = document.getElementById('merge-dialog');
+  dialog.showModal();
+
+  return new Promise(function (resolve) {
+    function choose(which) {
+      return function () {
+        dialog.close();
+        toast(which === 'local'
+          ? 'Kept this device’s data.'
+          : 'Loaded your account’s data.');
+        resolve(which);
+      };
+    }
+    document.getElementById('keep-remote-btn').onclick = choose('remote');
+    document.getElementById('keep-local-btn').onclick = choose('local');
+  });
+});
 
 CubCave.sync.onStatus(renderSyncStatus);
 CubCave.drive.onAuthChange(function () { renderSyncStatus(CubCave.sync.status()); });
